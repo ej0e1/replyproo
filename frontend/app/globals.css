@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 42 48% 96%;
+  --foreground: 160 24% 12%;
+  --card: 0 0% 100%;
+  --border: 40 22% 84%;
+  --primary: 164 73% 30%;
+  --secondary: 44 82% 89%;
+  --muted: 42 32% 92%;
+  --accent: 19 88% 63%;
+  --success: 145 63% 38%;
+  --warning: 24 93% 56%;
+  --font-sans: "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.dashboard-grid {
+  background-image: linear-gradient(rgba(17, 24, 39, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(17, 24, 39, 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+}

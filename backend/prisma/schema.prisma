@@ -1,0 +1,312 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MemberRole {
+  owner
+  admin
+  manager
+  agent
+  viewer
+}
+
+enum ChannelStatus {
+  draft
+  qr_pending
+  connected
+  disconnected
+  banned
+}
+
+enum ConversationStatus {
+  open
+  pending
+  resolved
+  closed
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageStatus {
+  queued
+  processing
+  sent
+  delivered
+  read
+  failed
+}
+
+enum AutomationType {
+  keyword
+  ai_reply
+  assignment
+  tagging
+  webhook
+}
+
+enum CampaignStatus {
+  draft
+  scheduled
+  running
+  paused
+  completed
+  failed
+}
+
+model Tenant {
+  id             String               @id @default(uuid()) @db.Uuid
+  name           String               @db.VarChar(160)
+  slug           String               @unique @db.VarChar(120)
+  planCode       String               @default("starter") @map("plan_code") @db.VarChar(50)
+  timezone       String               @default("Asia/Kuala_Lumpur") @db.VarChar(64)
+  isActive       Boolean              @default(true) @map("is_active")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  members        TenantMember[]
+  channels       Channel[]
+  contacts       Contact[]
+  conversations  Conversation[]
+  messages       Message[]
+  workflows      WorkflowDefinition[]
+  workflowRuns   WorkflowRun[]
+  campaigns      Campaign[]
+  campaignRuns   CampaignRecipient[]
+  analyticsDaily AnalyticsDaily[]
+
+  @@map("tenants")
+}
+
+model User {
+  id               String         @id @default(uuid()) @db.Uuid
+  email            String         @unique @db.VarChar(190)
+  fullName         String         @map("full_name") @db.VarChar(160)
+  passwordHash     String         @map("password_hash")
+  isActive         Boolean        @default(true) @map("is_active")
+  lastLoginAt      DateTime?      @map("last_login_at") @db.Timestamptz(6)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenantMembers    TenantMember[]
+  assignedConvos   Conversation[] @relation("ConversationAssignee")
+  createdCampaigns Campaign[]     @relation("CampaignCreator")
+
+  @@map("users")
+}
+
+model TenantMember {
+  id        String     @id @default(uuid()) @db.Uuid
+  tenantId  String     @map("tenant_id") @db.Uuid
+  userId    String     @map("user_id") @db.Uuid
+  role      MemberRole
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@map("tenant_members")
+}
+
+model Channel {
+  id                    String           @id @default(uuid()) @db.Uuid
+  tenantId              String           @map("tenant_id") @db.Uuid
+  displayName           String           @map("display_name") @db.VarChar(160)
+  phoneNumber           String?          @map("phone_number") @db.VarChar(30)
+  evolutionInstanceKey  String           @unique @map("evolution_instance_key") @db.VarChar(120)
+  evolutionInstanceName String           @map("evolution_instance_name") @db.VarChar(120)
+  evolutionServerKey    String?          @map("evolution_server_key") @db.VarChar(120)
+  status                ChannelStatus    @default(draft)
+  qrCode                String?          @map("qr_code")
+  lastConnectedAt       DateTime?        @map("last_connected_at") @db.Timestamptz(6)
+  metadata              Json             @default("{}")
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations         Conversation[]
+  messages              Message[]
+  campaignRecipients    CampaignRecipient[]
+  analyticsDaily        AnalyticsDaily[]
+
+  @@index([tenantId, status])
+  @@map("channels")
+}
+
+model Contact {
+  id             String               @id @default(uuid()) @db.Uuid
+  tenantId       String               @map("tenant_id") @db.Uuid
+  externalRef    String?              @map("external_ref") @db.VarChar(120)
+  name           String?              @db.VarChar(160)
+  phoneNumber    String               @map("phone_number") @db.VarChar(30)
+  email          String?              @db.VarChar(190)
+  tags           Json                 @default("[]")
+  customFields   Json                 @default("{}") @map("custom_fields")
+  optIn          Boolean              @default(true) @map("opt_in")
+  lastSeenAt     DateTime?            @map("last_seen_at") @db.Timestamptz(6)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations  Conversation[]
+  messages       Message[]
+  campaignRuns   CampaignRecipient[]
+
+  @@unique([tenantId, phoneNumber])
+  @@index([tenantId, phoneNumber])
+  @@map("contacts")
+}
+
+model Conversation {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @map("tenant_id") @db.Uuid
+  channelId        String             @map("channel_id") @db.Uuid
+  contactId        String             @map("contact_id") @db.Uuid
+  assignedToUserId String?            @map("assigned_to_user_id") @db.Uuid
+  status           ConversationStatus @default(open)
+  lastMessageAt    DateTime?          @map("last_message_at") @db.Timestamptz(6)
+  unreadCount      Int                @default(0) @map("unread_count")
+  aiEnabled        Boolean            @default(false) @map("ai_enabled")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel          Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact          Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedToUser   User?              @relation("ConversationAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  messages         Message[]
+  workflowRuns     WorkflowRun[]
+
+  @@unique([tenantId, channelId, contactId])
+  @@index([tenantId, status, lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model Message {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @map("tenant_id") @db.Uuid
+  conversationId    String           @map("conversation_id") @db.Uuid
+  channelId         String           @map("channel_id") @db.Uuid
+  contactId         String?          @map("contact_id") @db.Uuid
+  direction         MessageDirection
+  providerMessageId String?          @map("provider_message_id") @db.VarChar(190)
+  content           String?
+  mediaUrl          String?          @map("media_url")
+  status            MessageStatus    @default(queued)
+  errorMessage      String?          @map("error_message")
+  metadata          Json             @default("{}")
+  queuedAt          DateTime?        @map("queued_at") @db.Timestamptz(6)
+  sentAt            DateTime?        @map("sent_at") @db.Timestamptz(6)
+  deliveredAt       DateTime?        @map("delivered_at") @db.Timestamptz(6)
+  readAt            DateTime?        @map("read_at") @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation      Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  channel           Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact           Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  campaignRecipients CampaignRecipient[]
+
+  @@index([tenantId, conversationId, createdAt(sort: Desc)])
+  @@index([providerMessageId])
+  @@map("messages")
+}
+
+model WorkflowDefinition {
+  id            String         @id @default(uuid()) @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  name          String         @db.VarChar(160)
+  type          AutomationType
+  isActive      Boolean        @default(true) @map("is_active")
+  triggerConfig Json           @map("trigger_config")
+  stepsConfig   Json           @map("steps_config")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs          WorkflowRun[]
+
+  @@index([tenantId, isActive])
+  @@map("workflow_definitions")
+}
+
+model WorkflowRun {
+  id             String              @id @default(uuid()) @db.Uuid
+  tenantId       String              @map("tenant_id") @db.Uuid
+  workflowId     String              @map("workflow_id") @db.Uuid
+  conversationId String?             @map("conversation_id") @db.Uuid
+  currentStep    String?             @map("current_step") @db.VarChar(120)
+  state          Json                @default("{}")
+  startedAt      DateTime            @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt     DateTime?           @map("finished_at") @db.Timestamptz(6)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow       WorkflowDefinition  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  conversation   Conversation?       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("workflow_runs")
+}
+
+model Campaign {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  name            String              @db.VarChar(160)
+  status          CampaignStatus      @default(draft)
+  scheduledAt     DateTime?           @map("scheduled_at") @db.Timestamptz(6)
+  startedAt       DateTime?           @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?           @map("completed_at") @db.Timestamptz(6)
+  audienceFilter  Json                @default("{}") @map("audience_filter")
+  templatePayload Json                @default("{}") @map("template_payload")
+  createdByUserId String?             @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser   User?               @relation("CampaignCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  recipients      CampaignRecipient[]
+
+  @@index([tenantId, status, scheduledAt])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id           String        @id @default(uuid()) @db.Uuid
+  campaignId   String        @map("campaign_id") @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  contactId    String        @map("contact_id") @db.Uuid
+  channelId    String        @map("channel_id") @db.Uuid
+  messageId    String?       @map("message_id") @db.Uuid
+  status       MessageStatus @default(queued)
+  errorMessage String?       @map("error_message")
+  queuedAt     DateTime?     @map("queued_at") @db.Timestamptz(6)
+  sentAt       DateTime?     @map("sent_at") @db.Timestamptz(6)
+  deliveredAt  DateTime?     @map("delivered_at") @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  campaign     Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel      Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  message      Message?      @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, contactId, channelId])
+  @@index([campaignId, status])
+  @@map("campaign_recipients")
+}
+
+model AnalyticsDaily {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  channelId      String?   @map("channel_id") @db.Uuid
+  metricDate     DateTime  @map("metric_date") @db.Date
+  inboundCount   Int       @default(0) @map("inbound_count")
+  outboundCount  Int       @default(0) @map("outbound_count")
+  deliveredCount Int       @default(0) @map("delivered_count")
+  failedCount    Int       @default(0) @map("failed_count")
+  aiReplyCount   Int       @default(0) @map("ai_reply_count")
+  campaignCount  Int       @default(0) @map("campaign_count")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel        Channel?  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channelId, metricDate])
+  @@map("analytics_daily")
+}

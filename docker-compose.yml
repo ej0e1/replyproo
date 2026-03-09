@@ -1,0 +1,229 @@
+version: "3.9"
+
+x-common-env: &common-env
+  NODE_ENV: production
+  TZ: Asia/Kuala_Lumpur
+
+x-backend-env: &backend-env
+  <<: *common-env
+  PORT: 3000
+  APP_URL: ${APP_URL}
+  API_URL: ${API_URL}
+  FRONTEND_URL: ${FRONTEND_URL}
+  BACKEND_INTERNAL_URL: http://backend:3000/api
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  JWT_SECRET: ${JWT_SECRET}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+  EVOLUTION_API_URL: http://evolution-api:8080
+  EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+  EVOLUTION_WEBHOOK_URL: http://backend:3000/api/webhooks/evolution
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  OPENAI_MODEL: ${OPENAI_MODEL}
+  SOCKET_IO_CORS_ORIGIN: ${FRONTEND_URL}
+  BULLMQ_PREFIX: replypro
+  INBOUND_QUEUE_NAME: inbound:process
+  WORKFLOW_QUEUE_NAME: workflow:execute
+  AI_QUEUE_NAME: ai:reply
+  SEND_QUEUE_NAME: message:send
+  CAMPAIGN_QUEUE_NAME: campaign:schedule
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: replypro-nginx
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_cache:/var/cache/nginx
+    networks:
+      - edge_net
+      - app_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: replypro-frontend
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: 3000
+      NEXT_PUBLIC_APP_URL: ${APP_URL}
+      NEXT_PUBLIC_API_URL: ${API_URL}
+      NEXT_PUBLIC_SOCKET_URL: ${API_URL}
+    expose:
+      - "3000"
+    networks:
+      - edge_net
+      - app_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: replypro-backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      evolution-api:
+        condition: service_started
+    expose:
+      - "3000"
+    networks:
+      - edge_net
+      - app_net
+      - data_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: replypro-worker
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+      CAMPAIGN_BATCH_SIZE: ${CAMPAIGN_BATCH_SIZE}
+      CAMPAIGN_MIN_DELAY_MS: ${CAMPAIGN_MIN_DELAY_MS}
+      CAMPAIGN_MAX_DELAY_MS: ${CAMPAIGN_MAX_DELAY_MS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      evolution-api:
+        condition: service_started
+    networks:
+      - app_net
+      - data_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: replypro-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data_net
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: replypro-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --save 60 1000
+      --maxmemory 512mb
+      --maxmemory-policy noeviction
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - data_net
+      - app_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    container_name: replypro-evolution
+    restart: unless-stopped
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      SERVER_URL: http://localhost:8080
+      LOG_LEVEL: ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,WEBHOOKS
+      LOG_BAILEYS: debug
+      QRCODE_LIMIT: 30
+      DEL_INSTANCE: "false"
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${EVOLUTION_POSTGRES_DB}
+      DATABASE_CONNECTION_CLIENT_NAME: replypro_evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/0
+      CACHE_REDIS_SAVE_INSTANCES: "true"
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      WEBHOOK_GLOBAL_URL: http://backend:3000/api/webhooks/evolution
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "true"
+      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+      WEBHOOK_EVENTS_QRCODE_UPDATED: "true"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
+      WEBHOOK_EVENTS_MESSAGES_UPDATE: "true"
+      WEBHOOK_EVENTS_SEND_MESSAGE: "true"
+      CONFIG_SESSION_PHONE_CLIENT: ReplyPro
+      CONFIG_SESSION_PHONE_NAME: Chrome
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - app_net
+      - data_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  edge_net:
+    driver: bridge
+  app_net:
+    driver: bridge
+  data_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:
+  nginx_cache:
