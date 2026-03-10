@@ -258,6 +258,17 @@ export class WhatsAppController {
           status: 'open',
         },
       });
+
+      await this.triggerKeywordAutomation({
+        tenantId: channel.tenantId,
+        channelId: channel.id,
+        instanceName: channel.evolutionInstanceName,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        phoneNumber,
+        triggerMessageId: providerMessageId ?? null,
+        content,
+      });
     }
 
     this.realtimeGateway.emitTenantEvent(channel.tenantId, 'inbox.updated', {
@@ -286,6 +297,7 @@ export class WhatsAppController {
         id: true,
         tenantId: true,
         displayName: true,
+        evolutionInstanceName: true,
         status: true,
         metadata: true,
         qrCode: true,
@@ -392,6 +404,109 @@ export class WhatsAppController {
     );
   }
 
+  private async triggerKeywordAutomation(params: {
+    tenantId: string;
+    channelId: string;
+    instanceName: string;
+    conversationId: string;
+    contactId: string;
+    phoneNumber: string;
+    triggerMessageId: string | null;
+    content: string | null;
+  }) {
+    const normalizedContent = params.content?.trim().toLowerCase();
+    if (!normalizedContent) {
+      return null;
+    }
+
+    const workflows = await this.prisma.workflowDefinition.findMany({
+      where: {
+        tenantId: params.tenantId,
+        type: {
+          in: ['keyword', 'ai_reply'],
+        },
+        isActive: true,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        triggerConfig: true,
+        stepsConfig: true,
+      },
+    });
+
+    for (const workflow of workflows) {
+      const keywords = this.extractKeywords(workflow.triggerConfig);
+      const matchedKeyword = keywords.find((keyword) => normalizedContent.includes(keyword));
+      if (!matchedKeyword) {
+        continue;
+      }
+
+      const replyText = this.extractAutomationReply(workflow.stepsConfig, matchedKeyword);
+      if (!replyText) {
+        continue;
+      }
+
+      const queuedMessage = await this.prisma.message.create({
+        data: {
+          tenantId: params.tenantId,
+          conversationId: params.conversationId,
+          channelId: params.channelId,
+          contactId: params.contactId,
+          direction: 'outbound',
+          content: replyText,
+          status: 'queued',
+          queuedAt: new Date(),
+          metadata: {
+            source: 'keyword-automation',
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            matchedKeyword,
+            triggerMessageId: params.triggerMessageId,
+          },
+        },
+        select: {
+          id: true,
+          content: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+
+      await this.prisma.conversation.update({
+        where: { id: params.conversationId },
+        data: {
+          lastMessageAt: new Date(),
+        },
+      });
+
+      await this.queueService.enqueueMessageSend({
+        tenantId: params.tenantId,
+        channelId: params.channelId,
+        instanceName: params.instanceName,
+        conversationId: params.conversationId,
+        messageId: queuedMessage.id,
+        to: params.phoneNumber,
+        content: replyText,
+      });
+
+      this.realtimeGateway.emitTenantEvent(params.tenantId, 'message.queued', {
+        conversationId: params.conversationId,
+        message: queuedMessage,
+      });
+      this.realtimeGateway.emitTenantEvent(params.tenantId, 'inbox.updated', {
+        type: 'automation.keyword',
+        conversationId: params.conversationId,
+        messageId: queuedMessage.id,
+      });
+
+      return { workflowId: workflow.id, matchedKeyword };
+    }
+
+    return null;
+  }
+
   private async updateOutboundMessageStatus(
     channel: { id: string; tenantId: string },
     providerMessageId: string,
@@ -470,6 +585,29 @@ export class WhatsAppController {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  }
+
+  private extractKeywords(value: unknown) {
+    const config = this.toObject(value);
+    const keywords = config.keywords;
+    if (!Array.isArray(keywords)) {
+      return [] as string[];
+    }
+
+    return keywords
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  private extractAutomationReply(value: unknown, matchedKeyword: string) {
+    const config = this.toObject(value);
+    const directReply = config.replyText;
+    if (typeof directReply === 'string' && directReply.trim()) {
+      return directReply.trim();
+    }
+
+    return `Terima kasih. Kami terima pertanyaan tentang ${matchedKeyword} dan akan balas dengan lebih lanjut sebentar lagi.`;
   }
 
   private pickHigherMessageStatus(current: string | null | undefined, incoming: 'sent' | 'delivered' | 'read') {

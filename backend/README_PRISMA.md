@@ -24,8 +24,9 @@ Cadangan flow tempatan:
 2. jalankan `npm install`
 3. jalankan `npm run prisma:generate`
 4. untuk initial sync, guna `npm run prisma:push`
-5. isi demo data dengan `npm run prisma:seed`
-6. selepas schema stabil, tukar ke migration flow dengan `npm run prisma:migrate`
+5. isi demo data asas dengan `npm run prisma:seed`
+6. jika mahu sample inbox/automation, jalankan `SEED_DEMO_CONTENT=true npm run prisma:seed`
+7. selepas schema stabil, tukar ke migration flow dengan `npm run prisma:migrate`
 
 Endpoint contoh untuk semak wiring:
 
@@ -33,14 +34,17 @@ Endpoint contoh untuk semak wiring:
 - `GET /api/tenants`
 - `GET /api/tenants/:slug`
 
-Data demo yang dimasukkan:
+Data seed default yang dimasukkan:
 
 - 1 tenant: `replypro-demo`
 - 2 users: owner dan agent
-- 2 channels WhatsApp
+- 2 channels WhatsApp asas
+
+Jika `SEED_DEMO_CONTENT=true`, seed juga akan masukkan:
+
 - 2 contacts
 - 2 conversations
-- sample messages, workflow, campaign, dan analytics harian
+- sample messages, workflow keyword auto-reply, campaign, dan analytics harian
 
 Kredensial demo selepas seed:
 

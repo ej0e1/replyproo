@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { hash } from 'bcryptjs';
 
 const prisma = new PrismaClient();
+const shouldSeedDemoContent = process.env.SEED_DEMO_CONTENT === 'true';
 
 async function main() {
   const demoPasswordHash = await hash('ReplyPro123!', 10);
@@ -88,27 +89,19 @@ async function main() {
     update: {
       tenantId: tenant.id,
       displayName: 'Sales Hotline',
-      phoneNumber: '60123456789',
-      evolutionInstanceName: 'replypro-demo-main',
-      status: 'connected',
-      metadata: {
-        qualityScore: 'high',
-        warmupStage: 'stable',
-      },
     },
     create: {
       tenantId: tenant.id,
       displayName: 'Sales Hotline',
-      phoneNumber: '60123456789',
+      phoneNumber: null,
       evolutionInstanceKey: 'replypro-demo-main',
       evolutionInstanceName: 'replypro-demo-main',
       evolutionServerKey: 'evo-node-a',
-      status: 'connected',
+      status: 'draft',
       metadata: {
         qualityScore: 'high',
         warmupStage: 'stable',
       },
-      lastConnectedAt: new Date(),
     },
   });
 
@@ -117,28 +110,29 @@ async function main() {
     update: {
       tenantId: tenant.id,
       displayName: 'Support Line',
-      phoneNumber: '60111222333',
-      evolutionInstanceName: 'replypro-demo-support',
-      status: 'qr_pending',
-      metadata: {
-        qualityScore: 'warming',
-        warmupStage: 'early',
-      },
     },
     create: {
       tenantId: tenant.id,
       displayName: 'Support Line',
-      phoneNumber: '60111222333',
+      phoneNumber: null,
       evolutionInstanceKey: 'replypro-demo-support',
       evolutionInstanceName: 'replypro-demo-support',
       evolutionServerKey: 'evo-node-b',
-      status: 'qr_pending',
+      status: 'draft',
       metadata: {
         qualityScore: 'warming',
         warmupStage: 'early',
       },
     },
   });
+
+  if (!shouldSeedDemoContent) {
+    console.log('Seed asas selesai tanpa demo conversations/messages.');
+    console.log('Set `SEED_DEMO_CONTENT=true` jika mahu isi sample inbox dan automations.');
+    console.log('Login demo owner: owner@replypro.demo / ReplyPro123!');
+    console.log('Login demo agent: agent@replypro.demo / ReplyPro123!');
+    return;
+  }
 
   const contactA = await prisma.contact.upsert({
     where: {
@@ -314,28 +308,28 @@ async function main() {
     },
     update: {
       tenantId: tenant.id,
-      name: 'Auto Reply FAQ',
-      type: 'ai_reply',
+      name: 'Auto Reply Keyword',
+      type: 'keyword',
       isActive: true,
       triggerConfig: {
         keywords: ['harga', 'stok', 'delivery'],
       },
       stepsConfig: {
-        mode: 'instant-ai',
+        replyText: 'Terima kasih. Stok masih ada buat masa ini. Team kami akan balas butiran harga dan penghantaran sekejap lagi.',
         fallbackToHuman: true,
       },
     },
     create: {
       id: '11111111-1111-1111-1111-111111111111',
       tenantId: tenant.id,
-      name: 'Auto Reply FAQ',
-      type: 'ai_reply',
+      name: 'Auto Reply Keyword',
+      type: 'keyword',
       isActive: true,
       triggerConfig: {
         keywords: ['harga', 'stok', 'delivery'],
       },
       stepsConfig: {
-        mode: 'instant-ai',
+        replyText: 'Terima kasih. Stok masih ada buat masa ini. Team kami akan balas butiran harga dan penghantaran sekejap lagi.',
         fallbackToHuman: true,
       },
     },
