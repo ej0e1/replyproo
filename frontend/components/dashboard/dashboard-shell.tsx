@@ -605,9 +605,19 @@ export function DashboardShell() {
                       </Button>
                     </div>
                     {channel.qrCode ? (
-                      <pre className="mt-3 overflow-x-auto rounded-2xl border bg-white p-3 text-[10px] leading-4 text-foreground/65">
-                        {channel.qrCode.slice(0, 400)}
-                      </pre>
+                      channel.qrCode.startsWith('data:image') ? (
+                        <div className="mt-3 rounded-2xl border bg-white p-4">
+                          <img
+                            src={channel.qrCode}
+                            alt={`QR ${channel.displayName}`}
+                            className="mx-auto h-auto w-full max-w-[280px] rounded-xl"
+                          />
+                        </div>
+                      ) : (
+                        <pre className="mt-3 overflow-x-auto rounded-2xl border bg-white p-3 text-[10px] leading-4 text-foreground/65">
+                          {channel.qrCode.slice(0, 400)}
+                        </pre>
+                      )
                     ) : (
                       <p className="mt-3 text-xs text-foreground/55">QR belum diambil untuk channel ini.</p>
                     )}
