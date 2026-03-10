@@ -9,6 +9,9 @@ import { Input } from '@/components/ui/input';
 import { clearAuthToken, fetchJson, getAuthToken } from '@/lib/auth';
 
 type MeResponse = {
+  id: string;
+  fullName: string;
+  email: string;
   tenantMembers: Array<{
     tenant: {
       id: string;
@@ -25,6 +28,7 @@ type ContactSummary = {
   phoneNumber: string;
   email: string | null;
   tags: string[];
+  leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
   optIn: boolean;
   lastSeenAt: string | null;
 };
@@ -40,6 +44,7 @@ type ConversationSummary = {
     name: string | null;
     phoneNumber: string;
     tags: string[];
+    leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
   };
   channel: {
     id: string;
@@ -72,6 +77,7 @@ type ConversationDetail = {
     phoneNumber: string;
     email: string | null;
     tags: string[];
+    leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
   };
   channel: {
     id: string;
@@ -120,8 +126,40 @@ function getMessageTime(message: ConversationDetail['messages'][number]) {
   return message.readAt ?? message.deliveredAt ?? message.sentAt ?? message.createdAt;
 }
 
+function formatLeadStage(stage: ContactSummary['leadStage']) {
+  switch (stage) {
+    case 'new_lead':
+      return 'New Lead';
+    case 'follow_up':
+      return 'Follow-up';
+    case 'test_drive':
+      return 'Test Drive';
+    case 'booking':
+      return 'Booking';
+    case 'loan_submitted':
+      return 'Loan Submitted';
+    case 'won':
+      return 'Won';
+    case 'lost':
+      return 'Lost';
+    default:
+      return stage;
+  }
+}
+
+const dealerLeadStages: Array<ContactSummary['leadStage']> = [
+  'new_lead',
+  'follow_up',
+  'test_drive',
+  'booking',
+  'loan_submitted',
+  'won',
+  'lost',
+];
+
 export function InboxManager() {
   const router = useRouter();
+  const [profile, setProfile] = useState<MeResponse | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [tenantName, setTenantName] = useState('ReplyPro Workspace');
   const [tenantSlug, setTenantSlug] = useState('workspace');
@@ -133,6 +171,8 @@ export function InboxManager() {
   const [draftMessage, setDraftMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isUpdatingAssignmentOrStatus, setIsUpdatingAssignmentOrStatus] = useState(false);
+  const [isUpdatingLeadStage, setIsUpdatingLeadStage] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -145,6 +185,36 @@ export function InboxManager() {
     setContacts(contactsData);
     setConversations(conversationsData);
     setActiveConversationId((current) => current ?? conversationsData[0]?.id ?? null);
+  }
+
+  async function refreshConversationDetail(token: string, conversationId: string) {
+    const detail = await fetchJson<ConversationDetail>(`/api/conversations/${conversationId}/messages`, undefined, token);
+    setConversationDetail(detail);
+  }
+
+  function applyConversationSummaryUpdate(updated: ConversationSummary) {
+    setConversations((current) =>
+      current.map((conversation) => (conversation.id === updated.id ? { ...conversation, ...updated } : conversation)),
+    );
+
+    setConversationDetail((current) => {
+      if (!current || current.id !== updated.id) {
+        return current;
+      }
+
+      return {
+        ...current,
+        status: updated.status,
+        unreadCount: updated.unreadCount,
+        aiEnabled: updated.aiEnabled,
+        assignedToUser: updated.assignedToUser,
+        channel: updated.channel,
+        contact: {
+          ...current.contact,
+          ...updated.contact,
+        },
+      };
+    });
   }
 
   useEffect(() => {
@@ -160,6 +230,7 @@ export function InboxManager() {
       fetchJson<ConversationSummary[]>('/api/conversations', undefined, token),
     ])
       .then(([profileData, contactsData, conversationsData]) => {
+        setProfile(profileData);
         const tenant = profileData.tenantMembers[0]?.tenant;
         setTenantId(tenant?.id ?? null);
         setTenantName(tenant?.name ?? 'ReplyPro Workspace');
@@ -254,12 +325,86 @@ export function InboxManager() {
 
       setDraftMessage('');
       await refreshInboxData(token);
-      const detail = await fetchJson<ConversationDetail>(`/api/conversations/${activeConversationId}/messages`, undefined, token);
-      setConversationDetail(detail);
+      await refreshConversationDetail(token, activeConversationId);
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Gagal hantar mesej');
     } finally {
       setIsSending(false);
+    }
+  }
+
+  async function handleUpdateStatus(status: 'open' | 'pending' | 'resolved' | 'closed') {
+    const token = getAuthToken();
+    if (!token || !activeConversationId || isUpdatingAssignmentOrStatus) {
+      return;
+    }
+
+    try {
+      setIsUpdatingAssignmentOrStatus(true);
+      setError(null);
+      const updated = await fetchJson<ConversationSummary>(
+        `/api/conversations/${activeConversationId}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        },
+        token,
+      );
+      applyConversationSummaryUpdate(updated);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Gagal kemas kini status');
+    } finally {
+      setIsUpdatingAssignmentOrStatus(false);
+    }
+  }
+
+  async function handleUpdateAssignee(action: 'assign_to_me' | 'unassign') {
+    const token = getAuthToken();
+    if (!token || !activeConversationId || isUpdatingAssignmentOrStatus) {
+      return;
+    }
+
+    try {
+      setIsUpdatingAssignmentOrStatus(true);
+      setError(null);
+      const updated = await fetchJson<ConversationSummary>(
+        `/api/conversations/${activeConversationId}/assignee`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ action }),
+        },
+        token,
+      );
+      applyConversationSummaryUpdate(updated);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Gagal kemas kini assignment');
+    } finally {
+      setIsUpdatingAssignmentOrStatus(false);
+    }
+  }
+
+  async function handleUpdateLeadStage(stage: ContactSummary['leadStage']) {
+    const token = getAuthToken();
+    if (!token || !activeConversationId || isUpdatingLeadStage) {
+      return;
+    }
+
+    try {
+      setIsUpdatingLeadStage(true);
+      setError(null);
+      const updated = await fetchJson<ConversationSummary>(
+        `/api/conversations/${activeConversationId}/lead-stage`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ stage }),
+        },
+        token,
+      );
+      applyConversationSummaryUpdate(updated);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Gagal kemas kini lead stage');
+    } finally {
+      setIsUpdatingLeadStage(false);
     }
   }
 
@@ -343,6 +488,9 @@ export function InboxManager() {
                   <div>
                     <p className="font-medium">{conversation.contact.name ?? conversation.contact.phoneNumber}</p>
                     <p className="text-sm text-foreground/60">{conversation.channel.displayName}</p>
+                    <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-foreground/45">
+                      {formatLeadStage(conversation.contact.leadStage)}
+                    </p>
                   </div>
                   <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/70">
                     {conversation.status}
@@ -386,6 +534,9 @@ export function InboxManager() {
                 <div>
                   <p className="font-medium">{conversationDetail.contact.name ?? conversationDetail.contact.phoneNumber}</p>
                   <p className="text-sm text-foreground/60">{conversationDetail.contact.phoneNumber}</p>
+                  <div className="mt-3 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
+                    {formatLeadStage(conversationDetail.contact.leadStage)}
+                  </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {conversationDetail.contact.tags.map((tag) => (
                       <span key={tag} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-foreground/75">
@@ -397,6 +548,48 @@ export function InboxManager() {
                 <div className="space-y-1 text-right text-sm text-foreground/62">
                   <p>{conversationDetail.channel.displayName}</p>
                   <p>{conversationDetail.assignedToUser?.fullName ?? 'Belum assign agent'}</p>
+                  <p className="text-xs uppercase tracking-[0.16em]">{conversationDetail.status}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2 rounded-[24px] border bg-muted/45 p-3">
+                <Button
+                  variant="secondary"
+                  className="h-10"
+                  onClick={() => handleUpdateAssignee(conversationDetail.assignedToUser?.id === profile?.id ? 'unassign' : 'assign_to_me')}
+                  disabled={isUpdatingAssignmentOrStatus}
+                >
+                  {isUpdatingAssignmentOrStatus
+                    ? 'Mengemas kini...'
+                    : conversationDetail.assignedToUser?.id === profile?.id
+                      ? 'Unassign Saya'
+                      : 'Assign Kepada Saya'}
+                </Button>
+                <Button variant="ghost" className="h-10" onClick={() => handleUpdateStatus('open')} disabled={isUpdatingAssignmentOrStatus}>
+                  Set Open
+                </Button>
+                <Button variant="ghost" className="h-10" onClick={() => handleUpdateStatus('pending')} disabled={isUpdatingAssignmentOrStatus}>
+                  Set Pending
+                </Button>
+                <Button variant="ghost" className="h-10" onClick={() => handleUpdateStatus('resolved')} disabled={isUpdatingAssignmentOrStatus}>
+                  Mark Resolved
+                </Button>
+              </div>
+
+              <div className="mt-4 rounded-[24px] border bg-muted/45 p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Dealer Lead Pipeline</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {dealerLeadStages.map((stage) => (
+                    <Button
+                      key={stage}
+                      variant={conversationDetail.contact.leadStage === stage ? 'secondary' : 'ghost'}
+                      className="h-9"
+                      onClick={() => handleUpdateLeadStage(stage)}
+                      disabled={isUpdatingLeadStage}
+                    >
+                      {isUpdatingLeadStage && conversationDetail.contact.leadStage === stage ? 'Mengemas kini...' : formatLeadStage(stage)}
+                    </Button>
+                  ))}
                 </div>
               </div>
 

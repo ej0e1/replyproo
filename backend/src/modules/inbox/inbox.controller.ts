@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -45,6 +45,58 @@ export class InboxController {
       this.requireTenant(req.user),
       conversationId,
       body.content,
+    );
+  }
+
+  @Patch('conversations/:conversationId/status')
+  async updateConversationStatus(
+    @Req() req: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Body() body: { status: 'open' | 'pending' | 'resolved' | 'closed' },
+  ) {
+    return this.inboxService.updateConversationStatus(
+      this.requireTenant(req.user),
+      req.user.sub,
+      conversationId,
+      body.status,
+    );
+  }
+
+  @Patch('conversations/:conversationId/assignee')
+  async updateConversationAssignee(
+    @Req() req: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Body() body: { action: 'assign_to_me' | 'unassign' },
+  ) {
+    return this.inboxService.updateConversationAssignee(
+      this.requireTenant(req.user),
+      req.user.sub,
+      conversationId,
+      body.action,
+    );
+  }
+
+  @Patch('conversations/:conversationId/lead-stage')
+  async updateLeadStage(
+    @Req() req: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Body()
+    body: {
+      stage:
+        | 'new_lead'
+        | 'follow_up'
+        | 'test_drive'
+        | 'booking'
+        | 'loan_submitted'
+        | 'won'
+        | 'lost';
+    },
+  ) {
+    return this.inboxService.updateLeadStage(
+      this.requireTenant(req.user),
+      req.user.sub,
+      conversationId,
+      body.stage,
     );
   }
 
