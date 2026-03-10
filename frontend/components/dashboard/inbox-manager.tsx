@@ -158,6 +158,48 @@ function formatLeadStage(stage: ContactSummary['leadStage']) {
   }
 }
 
+function buildDealerQuickReplies(detail: ConversationDetail | null) {
+  const contactName = detail?.contact.name ?? 'tuan/puan';
+  const vehicleTypeLabel = detail?.contact.leadDetails.vehicleType === 'motorcycle' ? 'motor' : 'kereta';
+  const brand = detail?.contact.leadDetails.brand ?? 'pilihan anda';
+  const model = detail?.contact.leadDetails.modelInterest ?? `${brand} ${vehicleTypeLabel}`.trim();
+  const budget = detail?.contact.leadDetails.budgetMonthly ?? 'budget bulanan anda';
+  const branch = detail?.contact.leadDetails.showroomBranch ?? 'showroom kami';
+
+  return [
+    {
+      id: 'price',
+      label: 'Harga',
+      text: `Hi ${contactName}, untuk ${model}, saya boleh bantu semak harga atas jalan, promo semasa, dan anggaran bulanan ikut pakej yang sesuai dengan ${budget}.`,
+    },
+    {
+      id: 'stock',
+      label: 'Stok',
+      text: `Hi ${contactName}, stok untuk ${model} saya sedang semak sekarang. Jika anda mahu, saya boleh bantu semak warna available dan ETA unit ke ${branch}.`,
+    },
+    {
+      id: 'promo',
+      label: 'Promo',
+      text: `Hi ${contactName}, sekarang ada promo bulanan untuk ${model}. Saya boleh share rebate, gift, dan pakej installment yang paling sesuai untuk anda.`,
+    },
+    {
+      id: 'test-drive',
+      label: 'Test Drive',
+      text: `Hi ${contactName}, kalau anda free saya boleh bantu set slot test drive untuk ${model} di ${branch}. Boleh saya tahu hari dan masa yang anda prefer?`,
+    },
+    {
+      id: 'loan-docs',
+      label: 'Dokumen Loan',
+      text: `Hi ${contactName}, untuk permohonan loan ${model}, biasanya kami perlukan IC, lesen, slip gaji atau penyata bank bergantung pada profile anda. Kalau mahu saya boleh bantu senaraikan ikut situasi anda.`,
+    },
+    {
+      id: 'location',
+      label: 'Lokasi',
+      text: `Hi ${contactName}, anda boleh datang ke ${branch} untuk tengok unit ${model}. Kalau mahu, saya boleh share lokasi showroom dan arrange sales advisor standby untuk anda.`,
+    },
+  ];
+}
+
 const dealerLeadStages: Array<ContactSummary['leadStage']> = [
   'new_lead',
   'follow_up',
@@ -474,6 +516,10 @@ export function InboxManager() {
     setLeadDetailsForm((current) => ({ ...current, ...patch }));
   }
 
+  function handleUseQuickReply(text: string) {
+    setDraftMessage(text);
+  }
+
   const stats = useMemo(
     () => [
       { label: 'Conversations', value: String(conversations.length).padStart(2, '0'), icon: MessagesSquare },
@@ -496,6 +542,8 @@ export function InboxManager() {
       }),
     [conversations, stageFilter, statusFilter],
   );
+
+  const quickReplies = useMemo(() => buildDealerQuickReplies(conversationDetail), [conversationDetail]);
 
   useEffect(() => {
     if (!filteredConversations.length) {
@@ -810,6 +858,20 @@ export function InboxManager() {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              <div className="mt-4 rounded-[24px] border bg-muted/45 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Quick Reply Dealer</p>
+                  <span className="text-xs text-foreground/55">Klik untuk auto-isi draft</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {quickReplies.map((reply) => (
+                    <Button key={reply.id} variant="ghost" className="h-9" onClick={() => handleUseQuickReply(reply.text)}>
+                      {reply.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
               <div className="mt-5 flex gap-3 rounded-[24px] border bg-muted/55 p-3">
