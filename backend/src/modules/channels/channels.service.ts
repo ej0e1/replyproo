@@ -42,7 +42,7 @@ export class ChannelsService {
     let remoteError: string | null = ensure.error;
 
     try {
-      const qrPayload = await this.evolutionService.getQrCode(channel.evolutionInstanceName);
+      const qrPayload = await this.getQrCodeWithRecovery(channel.evolutionInstanceName);
       qrCode = this.extractQrCode(qrPayload);
     } catch (error) {
       remoteError = error instanceof Error ? error.message : 'Gagal mengambil QR';
@@ -91,7 +91,7 @@ export class ChannelsService {
     await this.ensureInstance(channel.evolutionInstanceName);
 
     try {
-      remote = await this.evolutionService.fetchInstance(channel.evolutionInstanceName);
+      remote = await this.fetchInstanceWithRecovery(channel.evolutionInstanceName);
     } catch (error) {
       remoteError = error instanceof Error ? error.message : 'Gagal refresh status';
     }
@@ -180,25 +180,47 @@ export class ChannelsService {
     const webhookUrl = 'http://backend:3000/api/webhooks/evolution';
 
     try {
-      const existing = await this.evolutionService.fetchInstance(instanceName);
-      const record = this.extractInstanceRecord(existing);
-      if (record) {
-        await this.evolutionService.setWebhook(instanceName, webhookUrl).catch(() => null);
-        return { provisioned: true, error: null };
+      await this.evolutionService.createInstance(instanceName);
+    } catch (error) {
+      if (!this.evolutionService.isInstanceAlreadyExistsError(error)) {
+        return {
+          provisioned: false,
+          error: error instanceof Error ? error.message : 'Gagal create instance',
+        };
       }
-    } catch {
-      // continue to create instance
     }
 
+    await this.evolutionService.setWebhook(instanceName, webhookUrl).catch(() => null);
+    return { provisioned: true, error: null };
+  }
+
+  private async getQrCodeWithRecovery(instanceName: string) {
     try {
-      await this.evolutionService.createInstance(instanceName);
-      await this.evolutionService.setWebhook(instanceName, webhookUrl).catch(() => null);
-      return { provisioned: true, error: null };
+      return await this.evolutionService.getQrCode(instanceName);
     } catch (error) {
-      return {
-        provisioned: false,
-        error: error instanceof Error ? error.message : 'Gagal create instance',
-      };
+      if (!this.evolutionService.isInstanceNotFoundError(error)) {
+        throw error;
+      }
+
+      await this.ensureInstance(instanceName);
+      return this.evolutionService.getQrCode(instanceName);
+    }
+  }
+
+  private async fetchInstanceWithRecovery(instanceName: string) {
+    try {
+      return await this.evolutionService.fetchInstance(instanceName);
+    } catch (error) {
+      if (this.evolutionService.isUnsupportedInstanceFetch(error)) {
+        return null;
+      }
+
+      if (!this.evolutionService.isInstanceNotFoundError(error)) {
+        throw error;
+      }
+
+      await this.ensureInstance(instanceName);
+      return this.evolutionService.fetchInstance(instanceName);
     }
   }
 

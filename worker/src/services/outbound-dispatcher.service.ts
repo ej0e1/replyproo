@@ -18,19 +18,13 @@ export class OutboundDispatcherService {
 
   async ensureInstance(instanceName: string) {
     try {
-      const existing = await this.evolutionClientService.fetchInstance(instanceName);
-      const record = this.extractRecord(existing);
-      if (record) {
-        return { ready: true, created: false };
-      }
-    } catch {
-      // continue to create
-    }
-
-    try {
       await this.evolutionClientService.createInstance(instanceName);
       return { ready: true, created: true };
-    } catch {
+    } catch (error) {
+      if (this.evolutionClientService.isInstanceAlreadyExistsError(error)) {
+        return { ready: true, created: false };
+      }
+
       return { ready: false, created: false };
     }
   }
@@ -52,24 +46,5 @@ export class OutboundDispatcherService {
       raw: response,
       ...data,
     };
-  }
-
-  private extractRecord(payload: unknown) {
-    if (Array.isArray(payload)) {
-      return payload[0] ?? null;
-    }
-
-    if (payload && typeof payload === 'object') {
-      const data = payload as Record<string, unknown>;
-      if (Array.isArray(data.instances)) {
-        return data.instances[0] ?? null;
-      }
-      if (Array.isArray(data.data)) {
-        return data.data[0] ?? null;
-      }
-      return payload;
-    }
-
-    return null;
   }
 }

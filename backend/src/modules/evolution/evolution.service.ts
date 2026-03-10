@@ -7,6 +7,17 @@ type SendMessagePayload = {
   text: string;
 };
 
+export class EvolutionRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly raw: string,
+    readonly payload: unknown,
+  ) {
+    super(message);
+  }
+}
+
 @Injectable()
 export class EvolutionService {
   private readonly logger = new Logger(EvolutionService.name);
@@ -83,6 +94,32 @@ export class EvolutionService {
     });
   }
 
+  isInstanceNotFoundError(error: unknown) {
+    if (!(error instanceof EvolutionRequestError)) {
+      return false;
+    }
+
+    const raw = error.raw.toLowerCase();
+    return error.status === 404 && raw.includes('not found') && raw.includes('instance');
+  }
+
+  isInstanceAlreadyExistsError(error: unknown) {
+    if (!(error instanceof EvolutionRequestError)) {
+      return false;
+    }
+
+    const raw = error.raw.toLowerCase();
+    return raw.includes('already exists') || raw.includes('already exist') || raw.includes('instance exists');
+  }
+
+  isUnsupportedInstanceFetch(error: unknown) {
+    if (!(error instanceof EvolutionRequestError)) {
+      return false;
+    }
+
+    return error.status === 404 && error.raw.toLowerCase().includes('not found');
+  }
+
   private async request(path: string, init: { method: string; body?: unknown }) {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: init.method,
@@ -98,7 +135,12 @@ export class EvolutionService {
 
     if (!response.ok) {
       this.logger.error(`Evolution API error ${response.status}: ${raw}`);
-      throw new Error(`Evolution API request failed with status ${response.status}`);
+      throw new EvolutionRequestError(
+        `Evolution API request failed with status ${response.status}`,
+        response.status,
+        raw,
+        payload,
+      );
     }
 
     return payload;

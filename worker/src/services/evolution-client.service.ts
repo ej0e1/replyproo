@@ -1,6 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+export class EvolutionClientRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly raw: string,
+    readonly payload: unknown,
+  ) {
+    super(message);
+  }
+}
+
 @Injectable()
 export class EvolutionClientService {
   private readonly logger = new Logger(EvolutionClientService.name);
@@ -87,6 +98,15 @@ export class EvolutionClientService {
     }
   }
 
+  isInstanceAlreadyExistsError(error: unknown) {
+    if (!(error instanceof EvolutionClientRequestError)) {
+      return false;
+    }
+
+    const raw = error.raw.toLowerCase();
+    return raw.includes('already exists') || raw.includes('already exist') || raw.includes('instance exists');
+  }
+
   private async request(path: string, init: { method: string; body?: unknown }) {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: init.method,
@@ -102,7 +122,12 @@ export class EvolutionClientService {
 
     if (!response.ok) {
       this.logger.error(`Evolution send error ${response.status}: ${raw}`);
-      throw new Error(`Evolution send failed with status ${response.status}`);
+      throw new EvolutionClientRequestError(
+        `Evolution send failed with status ${response.status}`,
+        response.status,
+        raw,
+        payload,
+      );
     }
 
     return payload;
