@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-type KeywordReplySettings = {
-  workflowId: string | null;
+export type KeywordRule = {
+  id: string | null;
   name: string;
   isActive: boolean;
   keywords: string[];
@@ -13,85 +13,135 @@ type KeywordReplySettings = {
 export class AutomationsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getKeywordReplySettings(tenantId: string): Promise<KeywordReplySettings> {
-    const workflow = await this.findKeywordWorkflow(tenantId);
+  async getKeywordRules(tenantId: string): Promise<{ rules: KeywordRule[] }> {
+    const workflows = await this.findKeywordWorkflows(tenantId);
 
     return {
-      workflowId: workflow?.id ?? null,
-      name: workflow?.name ?? 'Keyword Auto Reply',
-      isActive: workflow?.isActive ?? false,
-      keywords: this.extractKeywords(workflow?.triggerConfig),
-      replyText: this.extractReplyText(workflow?.stepsConfig),
+      rules: workflows.map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        isActive: workflow.isActive,
+        keywords: this.extractKeywords(workflow.triggerConfig),
+        replyText: this.extractReplyText(workflow.stepsConfig),
+      })),
+    };
+  }
+
+  async replaceKeywordRules(
+    tenantId: string,
+    body: { rules?: Array<{ id?: string | null; isActive?: boolean; keywords?: string[]; replyText?: string; name?: string }> },
+  ): Promise<{ rules: KeywordRule[] }> {
+    const incomingRules = Array.isArray(body.rules) ? body.rules : [];
+
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.workflowDefinition.findMany({
+        where: {
+          tenantId,
+          type: {
+            in: ['keyword', 'ai_reply'],
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+
+      const keepIds = new Set<string>();
+
+      for (const rule of incomingRules) {
+        const normalizedKeywords = this.normalizeKeywords(rule.keywords ?? []);
+        const replyText = typeof rule.replyText === 'string' ? rule.replyText.trim() : '';
+        const name = typeof rule.name === 'string' && rule.name.trim() ? rule.name.trim() : 'Keyword Auto Reply';
+
+        if (!normalizedKeywords.length || !replyText) {
+          continue;
+        }
+
+        const data = {
+          name,
+          type: 'keyword' as const,
+          isActive: Boolean(rule.isActive),
+          triggerConfig: {
+            keywords: normalizedKeywords,
+          },
+          stepsConfig: {
+            replyText,
+            fallbackToHuman: true,
+          },
+        };
+
+        if (rule.id && existing.some((item) => item.id === rule.id)) {
+          await tx.workflowDefinition.update({
+            where: { id: rule.id },
+            data,
+          });
+          keepIds.add(rule.id);
+          continue;
+        }
+
+        const created = await tx.workflowDefinition.create({
+          data: {
+            tenantId,
+            ...data,
+          },
+          select: { id: true },
+        });
+        keepIds.add(created.id);
+      }
+
+      const deleteIds = existing.map((item) => item.id).filter((id) => !keepIds.has(id));
+      if (deleteIds.length) {
+        await tx.workflowDefinition.deleteMany({
+          where: {
+            tenantId,
+            id: { in: deleteIds },
+          },
+        });
+      }
+    });
+
+    return this.getKeywordRules(tenantId);
+  }
+
+  async getKeywordReplySettings(tenantId: string) {
+    const settings = await this.getKeywordRules(tenantId);
+    const firstRule = settings.rules[0] ?? null;
+
+    return {
+      workflowId: firstRule?.id ?? null,
+      name: firstRule?.name ?? 'Keyword Auto Reply',
+      isActive: firstRule?.isActive ?? false,
+      keywords: firstRule?.keywords ?? [],
+      replyText: firstRule?.replyText ?? '',
     };
   }
 
   async saveKeywordReplySettings(
     tenantId: string,
     body: { isActive?: boolean; keywords?: string[]; replyText?: string; name?: string },
-  ): Promise<KeywordReplySettings> {
-    const keywords = this.normalizeKeywords(body.keywords ?? []);
-    const replyText = typeof body.replyText === 'string' ? body.replyText.trim() : '';
-    const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Keyword Auto Reply';
-    const isActive = Boolean(body.isActive);
+  ) {
+    const result = await this.replaceKeywordRules(tenantId, {
+      rules: [
+        {
+          isActive: body.isActive,
+          keywords: body.keywords,
+          replyText: body.replyText,
+          name: body.name,
+        },
+      ],
+    });
 
-    const existing = await this.findKeywordWorkflow(tenantId);
-    const saved = existing
-      ? await this.prisma.workflowDefinition.update({
-          where: { id: existing.id },
-          data: {
-            name,
-            type: 'keyword',
-            isActive,
-            triggerConfig: {
-              keywords,
-            },
-            stepsConfig: {
-              replyText,
-              fallbackToHuman: true,
-            },
-          },
-          select: {
-            id: true,
-            name: true,
-            isActive: true,
-            triggerConfig: true,
-            stepsConfig: true,
-          },
-        })
-      : await this.prisma.workflowDefinition.create({
-          data: {
-            tenantId,
-            name,
-            type: 'keyword',
-            isActive,
-            triggerConfig: {
-              keywords,
-            },
-            stepsConfig: {
-              replyText,
-              fallbackToHuman: true,
-            },
-          },
-          select: {
-            id: true,
-            name: true,
-            isActive: true,
-            triggerConfig: true,
-            stepsConfig: true,
-          },
-        });
-
+    const firstRule = result.rules[0] ?? null;
     return {
-      workflowId: saved.id,
-      name: saved.name,
-      isActive: saved.isActive,
-      keywords: this.extractKeywords(saved.triggerConfig),
-      replyText: this.extractReplyText(saved.stepsConfig),
+      workflowId: firstRule?.id ?? null,
+      name: firstRule?.name ?? 'Keyword Auto Reply',
+      isActive: firstRule?.isActive ?? false,
+      keywords: firstRule?.keywords ?? [],
+      replyText: firstRule?.replyText ?? '',
     };
   }
 
-  private findKeywordWorkflow(tenantId: string) {
-    return this.prisma.workflowDefinition.findFirst({
+  private findKeywordWorkflows(tenantId: string) {
+    return this.prisma.workflowDefinition.findMany({
       where: {
         tenantId,
         type: {
@@ -125,13 +175,7 @@ export class AutomationsService {
   }
 
   private normalizeKeywords(keywords: string[]) {
-    return Array.from(
-      new Set(
-        keywords
-          .map((keyword) => keyword.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    );
+    return Array.from(new Set(keywords.map((keyword) => keyword.trim().toLowerCase()).filter(Boolean)));
   }
 
   private toObject(value: unknown): Record<string, unknown> {

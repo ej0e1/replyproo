@@ -129,13 +129,35 @@ type ChannelSummary = {
   metadata: Record<string, unknown>;
 };
 
-type KeywordReplySettings = {
-  workflowId: string | null;
+type KeywordRule = {
+  id: string | null;
   name: string;
   isActive: boolean;
   keywords: string[];
   replyText: string;
 };
+
+type KeywordRulesResponse = {
+  rules: KeywordRule[];
+};
+
+type KeywordRuleForm = {
+  id: string | null;
+  name: string;
+  isActive: boolean;
+  keywordsText: string;
+  replyText: string;
+};
+
+function toAutomationRuleForms(rules: KeywordRule[]): KeywordRuleForm[] {
+  return rules.map((rule) => ({
+    id: rule.id,
+    name: rule.name,
+    isActive: rule.isActive,
+    keywordsText: rule.keywords.join(', '),
+    replyText: rule.replyText,
+  }));
+}
 
 function normalizeQrCode(qrCode: string | null) {
   if (!qrCode) {
@@ -196,12 +218,9 @@ export function DashboardShell() {
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationDetail | null>(null);
-  const [automationSettings, setAutomationSettings] = useState<KeywordReplySettings | null>(null);
+  const [automationSettings, setAutomationSettings] = useState<KeywordRulesResponse>({ rules: [] });
   const [draftMessage, setDraftMessage] = useState('');
-  const [automationName, setAutomationName] = useState('Keyword Auto Reply');
-  const [automationKeywords, setAutomationKeywords] = useState('');
-  const [automationReplyText, setAutomationReplyText] = useState('');
-  const [automationEnabled, setAutomationEnabled] = useState(false);
+  const [automationRules, setAutomationRules] = useState<KeywordRuleForm[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isSavingAutomation, setIsSavingAutomation] = useState(false);
   const [loadingQrByChannel, setLoadingQrByChannel] = useState<Record<string, boolean>>({});
@@ -236,7 +255,7 @@ export function DashboardShell() {
       fetchJson<ContactSummary[]>('/api/contacts', undefined, token),
       fetchJson<ConversationSummary[]>('/api/conversations', undefined, token),
       fetchJson<ChannelSummary[]>('/api/manage/channels', undefined, token),
-      fetchJson<KeywordReplySettings>('/api/manage/automations/keyword-reply', undefined, token),
+      fetchJson<KeywordRulesResponse>('/api/manage/automations/keyword-rules', undefined, token),
     ])
       .then(([profileData, contactsData, conversationsData, channelsData, automationData]) => {
         setProfile(profileData);
@@ -244,10 +263,7 @@ export function DashboardShell() {
         setConversations(conversationsData);
         setChannels(channelsData);
         setAutomationSettings(automationData);
-        setAutomationName(automationData.name);
-        setAutomationKeywords(automationData.keywords.join(', '));
-        setAutomationReplyText(automationData.replyText);
-        setAutomationEnabled(automationData.isActive);
+        setAutomationRules(toAutomationRuleForms(automationData.rules));
         setActiveConversationId(conversationsData[0]?.id ?? null);
         setError(null);
       })
@@ -446,33 +462,54 @@ export function DashboardShell() {
     setError(null);
 
     try {
-      const payload = await fetchJson<KeywordReplySettings>(
-        '/api/manage/automations/keyword-reply',
+      const payload = await fetchJson<KeywordRulesResponse>(
+        '/api/manage/automations/keyword-rules',
         {
           method: 'PUT',
           body: JSON.stringify({
-            name: automationName.trim() || 'Keyword Auto Reply',
-            isActive: automationEnabled,
-            keywords: automationKeywords
-              .split(',')
-              .map((keyword) => keyword.trim())
-              .filter(Boolean),
-            replyText: automationReplyText.trim(),
+            rules: automationRules.map((rule) => ({
+              id: rule.id,
+              name: rule.name.trim() || 'Keyword Auto Reply',
+              isActive: rule.isActive,
+              keywords: rule.keywordsText
+                .split(',')
+                .map((keyword) => keyword.trim())
+                .filter(Boolean),
+              replyText: rule.replyText.trim(),
+            })),
           }),
         },
         token,
       );
 
       setAutomationSettings(payload);
-      setAutomationName(payload.name);
-      setAutomationKeywords(payload.keywords.join(', '));
-      setAutomationReplyText(payload.replyText);
-      setAutomationEnabled(payload.isActive);
+      setAutomationRules(toAutomationRuleForms(payload.rules));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Gagal simpan automation');
     } finally {
       setIsSavingAutomation(false);
     }
+  }
+
+  function handleAddAutomationRule() {
+    setAutomationRules((current) => [
+      ...current,
+      {
+        id: null,
+        name: `Keyword Auto Reply ${current.length + 1}`,
+        isActive: true,
+        keywordsText: '',
+        replyText: '',
+      },
+    ]);
+  }
+
+  function handleRemoveAutomationRule(index: number) {
+    setAutomationRules((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }
+
+  function updateAutomationRule(index: number, patch: Partial<KeywordRuleForm>) {
+    setAutomationRules((current) => current.map((rule, currentIndex) => (currentIndex === index ? { ...rule, ...patch } : rule)));
   }
 
   if (loading) {
@@ -799,71 +836,87 @@ export function DashboardShell() {
                   <p className="text-sm text-foreground/60">Urus keyword auto-reply untuk tenant semasa terus dari localhost.</p>
                 </div>
               </div>
-              <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${automationEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                {automationEnabled ? 'Active' : 'Paused'}
+              <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+                {automationRules.filter((rule) => rule.isActive).length} Active Rules
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-              <div className="space-y-4 rounded-[24px] border bg-muted/55 p-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Workflow Name</p>
-                  <Input
-                    className="mt-2"
-                    value={automationName}
-                    onChange={(event) => setAutomationName(event.target.value)}
-                    placeholder="Keyword Auto Reply"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Keyword List</p>
-                  <Input
-                    className="mt-2"
-                    value={automationKeywords}
-                    onChange={(event) => setAutomationKeywords(event.target.value)}
-                    placeholder="stok, harga, delivery"
-                  />
-                  <p className="mt-2 text-xs text-foreground/55">Pisahkan keyword dengan koma. Matching dibuat secara lowercase.</p>
-                </div>
-
-                <label className="flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-sm">
-                  <div>
-                    <p className="font-medium">Auto-reply aktif</p>
-                    <p className="text-xs text-foreground/55">Bila aktif, inbound keyword akan terus queue balasan automatik.</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={automationEnabled}
-                    onChange={(event) => setAutomationEnabled(event.target.checked)}
-                    className="h-4 w-4 accent-[#17352b]"
-                  />
-                </label>
-
-                <div className="rounded-2xl bg-white px-4 py-3 text-sm text-foreground/65">
-                  <p>Workflow ID: {automationSettings?.workflowId ?? 'akan dicipta semasa save pertama'}</p>
-                </div>
-              </div>
-
-              <div className="space-y-4 rounded-[24px] border bg-muted/55 p-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Reply Text</p>
-                  <textarea
-                    value={automationReplyText}
-                    onChange={(event) => setAutomationReplyText(event.target.value)}
-                    placeholder="Terima kasih. Team kami akan balas sebentar lagi."
-                    className="mt-2 min-h-[180px] w-full rounded-[22px] border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-                  />
-                  <p className="mt-2 text-xs text-foreground/55">Balasan ini akan dihantar bila mesej masuk mengandungi salah satu keyword di atas.</p>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white px-4 py-3 text-sm text-foreground/65">
-                  <span>Keyword aktif semasa: {automationSettings?.keywords.join(', ') || 'belum diset'}</span>
+            <div className="mt-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border bg-muted/55 p-4 text-sm text-foreground/65">
+                <span>Total rule: {automationRules.length}</span>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={handleAddAutomationRule} className="h-10">
+                    Tambah Rule
+                  </Button>
                   <Button onClick={handleSaveAutomationSettings} disabled={isSavingAutomation} className="h-10">
-                    {isSavingAutomation ? 'Menyimpan...' : 'Simpan Setting'}
+                    {isSavingAutomation ? 'Menyimpan...' : 'Simpan Semua'}
                   </Button>
                 </div>
               </div>
+
+              {automationRules.length ? (
+                automationRules.map((rule, index) => (
+                  <div key={rule.id ?? `new-${index}`} className="grid gap-4 rounded-[24px] border bg-muted/55 p-4 lg:grid-cols-[0.9fr_1.1fr]">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Workflow Name</p>
+                        <Input
+                          className="mt-2"
+                          value={rule.name}
+                          onChange={(event) => updateAutomationRule(index, { name: event.target.value })}
+                          placeholder="Keyword Auto Reply"
+                        />
+                      </div>
+
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Keyword List</p>
+                        <Input
+                          className="mt-2"
+                          value={rule.keywordsText}
+                          onChange={(event) => updateAutomationRule(index, { keywordsText: event.target.value })}
+                          placeholder="stok, harga, delivery"
+                        />
+                        <p className="mt-2 text-xs text-foreground/55">Pisahkan keyword dengan koma. Matching dibuat secara lowercase.</p>
+                      </div>
+
+                      <label className="flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-sm">
+                        <div>
+                          <p className="font-medium">Rule aktif</p>
+                          <p className="text-xs text-foreground/55">Rule ini akan trigger bila keyword dipadan.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={rule.isActive}
+                          onChange={(event) => updateAutomationRule(index, { isActive: event.target.checked })}
+                          className="h-4 w-4 accent-[#17352b]"
+                        />
+                      </label>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-foreground/65">
+                        <span>Workflow ID: {rule.id ?? 'akan dicipta semasa save'}</span>
+                        <Button variant="ghost" onClick={() => handleRemoveAutomationRule(index)} className="h-9">
+                          Buang Rule
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Reply Text</p>
+                      <textarea
+                        value={rule.replyText}
+                        onChange={(event) => updateAutomationRule(index, { replyText: event.target.value })}
+                        placeholder="Terima kasih. Team kami akan balas sebentar lagi."
+                        className="mt-2 min-h-[180px] w-full rounded-[22px] border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                      />
+                      <p className="mt-2 text-xs text-foreground/55">Balasan ini akan dihantar bila mesej masuk mengandungi salah satu keyword rule ini.</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[24px] border bg-muted/55 px-4 py-10 text-sm text-foreground/60">
+                  Belum ada rule automation. Tekan `Tambah Rule` untuk mula bina auto-reply keyword.
+                </div>
+              )}
             </div>
           </article>
         </section>
