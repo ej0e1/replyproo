@@ -247,6 +247,29 @@ export function DashboardShell() {
   }, [activeConversationId, profile]);
 
   const primaryTenant = useMemo(() => profile?.tenantMembers[0]?.tenant ?? null, [profile]);
+  const formatMessageStatus = (status: string) => {
+    switch (status) {
+      case 'queued':
+        return 'Beratur';
+      case 'processing':
+        return 'Diproses';
+      case 'sent':
+        return 'Dihantar';
+      case 'delivered':
+        return 'Diterima';
+      case 'read':
+        return 'Dibaca';
+      case 'failed':
+        return 'Gagal';
+      default:
+        return status;
+    }
+  };
+
+  const getMessageTime = (message: ConversationDetail['messages'][number]) => {
+    return message.readAt ?? message.deliveredAt ?? message.sentAt ?? message.createdAt;
+  };
+
   const stats = useMemo(
     () => [
       { label: 'Conversations', value: String(conversations.length).padStart(2, '0'), icon: MessageCircleMore },
@@ -507,9 +530,9 @@ export function DashboardShell() {
                         >
                           <p className="leading-6">{message.content ?? 'Media / system message'}</p>
                           <div className={`mt-2 flex items-center gap-2 text-[11px] ${message.direction === 'outbound' ? 'text-white/70' : 'text-foreground/50'}`}>
-                            <span>{message.status}</span>
+                            <span>{formatMessageStatus(message.status)}</span>
                             <ChevronRight className="h-3 w-3" />
-                            <span>{new Date(message.createdAt).toLocaleString('ms-MY')}</span>
+                            <span>{new Date(getMessageTime(message)).toLocaleString('ms-MY')}</span>
                           </div>
                         </div>
                       </div>

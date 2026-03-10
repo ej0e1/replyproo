@@ -325,7 +325,12 @@ export class WhatsAppController {
     if (normalized.includes('delivery') || normalized.includes('delivered')) {
       return 'delivered' as const;
     }
-    if (normalized.includes('server') || normalized.includes('sent')) {
+    if (
+      normalized.includes('server') ||
+      normalized.includes('sent') ||
+      normalized.includes('ack') ||
+      normalized.includes('played')
+    ) {
       return 'sent' as const;
     }
 
@@ -403,6 +408,10 @@ export class WhatsAppController {
         id: true,
         tenantId: true,
         conversationId: true,
+        status: true,
+        sentAt: true,
+        deliveredAt: true,
+        readAt: true,
         metadata: true,
       },
     });
@@ -412,17 +421,20 @@ export class WhatsAppController {
     }
 
     const now = new Date();
+    const nextStatus = this.pickHigherMessageStatus(existing.status, status);
     const updated = await this.prisma.message.update({
       where: { id: existing.id },
       data: {
-        status,
-        sentAt: status === 'sent' ? now : undefined,
-        deliveredAt: status === 'delivered' ? now : undefined,
-        readAt: status === 'read' ? now : undefined,
+        status: nextStatus,
+        sentAt:
+          existing.sentAt ??
+          (nextStatus === 'sent' || nextStatus === 'delivered' || nextStatus === 'read' ? now : undefined),
+        deliveredAt: existing.deliveredAt ?? (nextStatus === 'delivered' || nextStatus === 'read' ? now : undefined),
+        readAt: existing.readAt ?? (nextStatus === 'read' ? now : undefined),
         metadata: {
           ...this.toObject(existing.metadata),
           lastWebhookEvent: payload?.event ?? 'messages.upsert',
-          lastWebhookStatus: status,
+          lastWebhookStatus: nextStatus,
           lastWebhookAt: now.toISOString(),
         },
       },
@@ -458,5 +470,19 @@ export class WhatsAppController {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  }
+
+  private pickHigherMessageStatus(current: string | null | undefined, incoming: 'sent' | 'delivered' | 'read') {
+    const rank: Record<string, number> = {
+      queued: 0,
+      processing: 1,
+      failed: 1,
+      sent: 2,
+      delivered: 3,
+      read: 4,
+    };
+
+    const existing = current ?? 'queued';
+    return (rank[incoming] ?? 0) >= (rank[existing] ?? 0) ? incoming : (existing as typeof incoming);
   }
 }

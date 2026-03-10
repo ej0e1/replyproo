@@ -25,6 +25,10 @@ export class InternalController {
         id: true,
         tenantId: true,
         conversationId: true,
+        status: true,
+        sentAt: true,
+        deliveredAt: true,
+        readAt: true,
         metadata: true,
       },
     });
@@ -34,16 +38,19 @@ export class InternalController {
     }
 
     const now = new Date();
+    const nextStatus = this.pickHigherStatus(existing, body.status);
 
     const updated = await this.prisma.message.update({
       where: { id: messageId },
       data: {
-        status: body.status,
+        status: nextStatus,
         providerMessageId: body.providerMessageId ?? undefined,
         errorMessage: body.errorMessage ?? undefined,
-        sentAt: body.status === 'sent' ? now : undefined,
-        deliveredAt: body.status === 'delivered' ? now : undefined,
-        readAt: body.status === 'read' ? now : undefined,
+        sentAt:
+          existing.sentAt ??
+          (nextStatus === 'sent' || nextStatus === 'delivered' || nextStatus === 'read' ? now : undefined),
+        deliveredAt: existing.deliveredAt ?? (nextStatus === 'delivered' || nextStatus === 'read' ? now : undefined),
+        readAt: existing.readAt ?? (nextStatus === 'read' ? now : undefined),
         metadata: {
           ...this.toObject(existing.metadata),
           lastStatusUpdateAt: now.toISOString(),
@@ -72,5 +79,22 @@ export class InternalController {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  }
+
+  private pickHigherStatus(
+    existing: { status?: string | null } | null,
+    incoming: 'queued' | 'processing' | 'sent' | 'delivered' | 'read' | 'failed',
+  ) {
+    const rank: Record<string, number> = {
+      queued: 0,
+      processing: 1,
+      failed: 1,
+      sent: 2,
+      delivered: 3,
+      read: 4,
+    };
+
+    const current = existing?.status ?? 'queued';
+    return (rank[incoming] ?? 0) >= (rank[current] ?? 0) ? incoming : (current as typeof incoming);
   }
 }
