@@ -29,6 +29,15 @@ type ContactSummary = {
   email: string | null;
   tags: string[];
   leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
+  leadDetails: {
+    vehicleType: 'car' | 'motorcycle' | null;
+    brand: string | null;
+    modelInterest: string | null;
+    budgetMonthly: string | null;
+    purchaseType: 'cash' | 'loan' | null;
+    tradeIn: 'yes' | 'no' | null;
+    showroomBranch: string | null;
+  };
   optIn: boolean;
   lastSeenAt: string | null;
 };
@@ -45,6 +54,7 @@ type ConversationSummary = {
     phoneNumber: string;
     tags: string[];
     leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
+    leadDetails: ContactSummary['leadDetails'];
   };
   channel: {
     id: string;
@@ -78,6 +88,7 @@ type ConversationDetail = {
     email: string | null;
     tags: string[];
     leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
+    leadDetails: ContactSummary['leadDetails'];
   };
   channel: {
     id: string;
@@ -157,6 +168,8 @@ const dealerLeadStages: Array<ContactSummary['leadStage']> = [
   'lost',
 ];
 
+const conversationStatuses: Array<ConversationSummary['status']> = ['open', 'pending', 'resolved', 'closed'];
+
 export function InboxManager() {
   const router = useRouter();
   const [profile, setProfile] = useState<MeResponse | null>(null);
@@ -169,10 +182,22 @@ export function InboxManager() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationDetail | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
+  const [stageFilter, setStageFilter] = useState<'all' | ContactSummary['leadStage']>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | ConversationSummary['status']>('all');
+  const [leadDetailsForm, setLeadDetailsForm] = useState<ContactSummary['leadDetails']>({
+    vehicleType: null,
+    brand: null,
+    modelInterest: null,
+    budgetMonthly: null,
+    purchaseType: null,
+    tradeIn: null,
+    showroomBranch: null,
+  });
   const [loading, setLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [isUpdatingAssignmentOrStatus, setIsUpdatingAssignmentOrStatus] = useState(false);
   const [isUpdatingLeadStage, setIsUpdatingLeadStage] = useState(false);
+  const [isSavingLeadDetails, setIsSavingLeadDetails] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -215,6 +240,10 @@ export function InboxManager() {
         },
       };
     });
+
+    if (updated.contact?.leadDetails) {
+      setLeadDetailsForm(updated.contact.leadDetails);
+    }
   }
 
   useEffect(() => {
@@ -264,6 +293,14 @@ export function InboxManager() {
         setError(fetchError instanceof Error ? fetchError.message : 'Gagal memuatkan mesej');
       });
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!conversationDetail) {
+      return;
+    }
+
+    setLeadDetailsForm(conversationDetail.contact.leadDetails);
+  }, [conversationDetail]);
 
   useEffect(() => {
     const token = getAuthToken();
@@ -408,6 +445,35 @@ export function InboxManager() {
     }
   }
 
+  async function handleSaveLeadDetails() {
+    const token = getAuthToken();
+    if (!token || !activeConversationId || isSavingLeadDetails) {
+      return;
+    }
+
+    try {
+      setIsSavingLeadDetails(true);
+      setError(null);
+      const updated = await fetchJson<ConversationSummary>(
+        `/api/conversations/${activeConversationId}/lead-details`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(leadDetailsForm),
+        },
+        token,
+      );
+      applyConversationSummaryUpdate(updated);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Gagal simpan lead details');
+    } finally {
+      setIsSavingLeadDetails(false);
+    }
+  }
+
+  function updateLeadDetailsForm(patch: Partial<ContactSummary['leadDetails']>) {
+    setLeadDetailsForm((current) => ({ ...current, ...patch }));
+  }
+
   const stats = useMemo(
     () => [
       { label: 'Conversations', value: String(conversations.length).padStart(2, '0'), icon: MessagesSquare },
@@ -420,6 +486,26 @@ export function InboxManager() {
     ],
     [contacts.length, conversations],
   );
+
+  const filteredConversations = useMemo(
+    () =>
+      conversations.filter((conversation) => {
+        const matchesStage = stageFilter === 'all' || conversation.contact.leadStage === stageFilter;
+        const matchesStatus = statusFilter === 'all' || conversation.status === statusFilter;
+        return matchesStage && matchesStatus;
+      }),
+    [conversations, stageFilter, statusFilter],
+  );
+
+  useEffect(() => {
+    if (!filteredConversations.length) {
+      return;
+    }
+
+    if (!activeConversationId || !filteredConversations.some((conversation) => conversation.id === activeConversationId)) {
+      setActiveConversationId(filteredConversations[0]?.id ?? null);
+    }
+  }, [activeConversationId, filteredConversations]);
 
   if (loading) {
     return <div className="rounded-[28px] border bg-white/90 px-6 py-10 text-sm text-foreground/65 shadow-panel">Memuatkan inbox workspace...</div>;
@@ -469,6 +555,48 @@ export function InboxManager() {
 
       {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
+      <section className="rounded-[28px] border bg-white/90 p-5 shadow-panel">
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Filter Lead Stage</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant={stageFilter === 'all' ? 'secondary' : 'ghost'} className="h-9" onClick={() => setStageFilter('all')}>
+                Semua Stage
+              </Button>
+              {dealerLeadStages.map((stage) => (
+                <Button
+                  key={stage}
+                  variant={stageFilter === stage ? 'secondary' : 'ghost'}
+                  className="h-9"
+                  onClick={() => setStageFilter(stage)}
+                >
+                  {formatLeadStage(stage)}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Filter Status Thread</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant={statusFilter === 'all' ? 'secondary' : 'ghost'} className="h-9" onClick={() => setStatusFilter('all')}>
+                Semua Status
+              </Button>
+              {conversationStatuses.map((status) => (
+                <Button
+                  key={status}
+                  variant={statusFilter === status ? 'secondary' : 'ghost'}
+                  className="h-9"
+                  onClick={() => setStatusFilter(status)}
+                >
+                  {status}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
         <article className="rounded-[28px] border bg-white/90 p-6 shadow-panel">
           <div className="flex items-center gap-3">
@@ -476,8 +604,12 @@ export function InboxManager() {
             <h2 className="text-xl font-semibold">Conversation Inbox</h2>
           </div>
 
+          <div className="mt-4 rounded-2xl border bg-muted/45 px-4 py-3 text-sm text-foreground/65">
+            Menunjukkan {filteredConversations.length} daripada {conversations.length} conversation.
+          </div>
+
           <div className="mt-5 space-y-3">
-            {conversations.map((conversation) => (
+            {filteredConversations.map((conversation) => (
               <button
                 key={conversation.id}
                 type="button"
@@ -506,9 +638,9 @@ export function InboxManager() {
               </button>
             ))}
 
-            {!conversations.length ? (
+            {!filteredConversations.length ? (
               <div className="rounded-2xl border bg-muted/55 px-4 py-6 text-sm text-foreground/60">
-                Tiada conversation lagi untuk tenant ini.
+                Tiada conversation yang sepadan dengan filter semasa.
               </div>
             ) : null}
           </div>
@@ -590,6 +722,76 @@ export function InboxManager() {
                       {isUpdatingLeadStage && conversationDetail.contact.leadStage === stage ? 'Mengemas kini...' : formatLeadStage(stage)}
                     </Button>
                   ))}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-[24px] border bg-muted/45 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Lead Details Dealer</p>
+                  <Button className="h-9" onClick={handleSaveLeadDetails} disabled={isSavingLeadDetails}>
+                    {isSavingLeadDetails ? 'Menyimpan...' : 'Simpan Lead'}
+                  </Button>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Jenis Kenderaan</span>
+                    <select
+                      value={leadDetailsForm.vehicleType ?? ''}
+                      onChange={(event) => updateLeadDetailsForm({ vehicleType: (event.target.value || null) as ContactSummary['leadDetails']['vehicleType'] })}
+                      className="h-11 w-full rounded-[18px] border border-border bg-white px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    >
+                      <option value="">Pilih jenis</option>
+                      <option value="car">Kereta</option>
+                      <option value="motorcycle">Motor</option>
+                    </select>
+                  </label>
+
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Jenama</span>
+                    <Input value={leadDetailsForm.brand ?? ''} onChange={(event) => updateLeadDetailsForm({ brand: event.target.value || null })} placeholder="Honda, Toyota, Yamaha" />
+                  </label>
+
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Model Minat</span>
+                    <Input value={leadDetailsForm.modelInterest ?? ''} onChange={(event) => updateLeadDetailsForm({ modelInterest: event.target.value || null })} placeholder="City Hatchback, Y15ZR" />
+                  </label>
+
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Budget Bulanan</span>
+                    <Input value={leadDetailsForm.budgetMonthly ?? ''} onChange={(event) => updateLeadDetailsForm({ budgetMonthly: event.target.value || null })} placeholder="RM850 / month" />
+                  </label>
+
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Jenis Pembelian</span>
+                    <select
+                      value={leadDetailsForm.purchaseType ?? ''}
+                      onChange={(event) => updateLeadDetailsForm({ purchaseType: (event.target.value || null) as ContactSummary['leadDetails']['purchaseType'] })}
+                      className="h-11 w-full rounded-[18px] border border-border bg-white px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    >
+                      <option value="">Pilih jenis</option>
+                      <option value="cash">Cash</option>
+                      <option value="loan">Loan</option>
+                    </select>
+                  </label>
+
+                  <label className="space-y-2 text-sm">
+                    <span className="text-foreground/60">Trade-in</span>
+                    <select
+                      value={leadDetailsForm.tradeIn ?? ''}
+                      onChange={(event) => updateLeadDetailsForm({ tradeIn: (event.target.value || null) as ContactSummary['leadDetails']['tradeIn'] })}
+                      className="h-11 w-full rounded-[18px] border border-border bg-white px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    >
+                      <option value="">Pilih status</option>
+                      <option value="yes">Ya</option>
+                      <option value="no">Tidak</option>
+                    </select>
+                  </label>
+
+                  <label className="space-y-2 text-sm md:col-span-2">
+                    <span className="text-foreground/60">Cawangan / Showroom</span>
+                    <Input value={leadDetailsForm.showroomBranch ?? ''} onChange={(event) => updateLeadDetailsForm({ showroomBranch: event.target.value || null })} placeholder="Setapak, Shah Alam, Johor Bahru" />
+                  </label>
                 </div>
               </div>
 

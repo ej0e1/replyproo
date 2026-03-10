@@ -18,6 +18,15 @@ const DEALER_LEAD_STAGES = [
 ] as const;
 
 type DealerLeadStage = (typeof DEALER_LEAD_STAGES)[number];
+type DealerLeadDetails = {
+  vehicleType: 'car' | 'motorcycle' | null;
+  brand: string | null;
+  modelInterest: string | null;
+  budgetMonthly: string | null;
+  purchaseType: 'cash' | 'loan' | null;
+  tradeIn: 'yes' | 'no' | null;
+  showroomBranch: string | null;
+};
 
 @Injectable()
 export class InboxService {
@@ -47,6 +56,7 @@ export class InboxService {
     return contacts.map((contact) => ({
       ...contact,
       leadStage: this.extractLeadStage(contact.customFields),
+      leadDetails: this.extractLeadDetails(contact.customFields),
     }));
   }
 
@@ -104,6 +114,7 @@ export class InboxService {
       contact: {
         ...conversation.contact,
         leadStage: this.extractLeadStage(conversation.contact.customFields),
+        leadDetails: this.extractLeadDetails(conversation.contact.customFields),
       },
     }));
   }
@@ -172,6 +183,7 @@ export class InboxService {
       contact: {
         ...conversation.contact,
         leadStage: this.extractLeadStage(conversation.contact.customFields),
+        leadDetails: this.extractLeadDetails(conversation.contact.customFields),
       },
     };
   }
@@ -342,6 +354,7 @@ export class InboxService {
         ? {
             ...refreshed.contact,
             leadStage: this.extractLeadStage(refreshed.contact.customFields),
+            leadDetails: this.extractLeadDetails(refreshed.contact.customFields),
           }
         : null,
     };
@@ -350,6 +363,116 @@ export class InboxService {
       type: 'conversation.leadStage',
       conversationId,
       leadStage: stage,
+    });
+
+    return payload;
+  }
+
+  async updateLeadDetails(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+    details: Partial<DealerLeadDetails>,
+  ) {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        id: true,
+        tenantId: true,
+        contactId: true,
+      },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation tidak dijumpai');
+    }
+
+    if (conversation.tenantId !== tenantId) {
+      throw new ForbiddenException('Akses tenant tidak sah');
+    }
+
+    await this.ensureTenantMember(tenantId, userId);
+
+    const currentContact = await this.prisma.contact.findUnique({
+      where: { id: conversation.contactId },
+      select: {
+        customFields: true,
+      },
+    });
+
+    const updatedCustomFields = {
+      ...this.toObject(currentContact?.customFields),
+      ...this.normalizeLeadDetails(details),
+      leadDetailsUpdatedAt: new Date().toISOString(),
+    };
+
+    await this.prisma.contact.update({
+      where: { id: conversation.contactId },
+      data: {
+        customFields: updatedCustomFields,
+      },
+    });
+
+    const refreshed = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        id: true,
+        status: true,
+        unreadCount: true,
+        aiEnabled: true,
+        lastMessageAt: true,
+        contact: {
+          select: {
+            id: true,
+            name: true,
+            phoneNumber: true,
+            tags: true,
+            customFields: true,
+          },
+        },
+        channel: {
+          select: {
+            id: true,
+            displayName: true,
+            phoneNumber: true,
+            status: true,
+          },
+        },
+        assignedToUser: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+          },
+        },
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            direction: true,
+            content: true,
+            status: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    const payload = {
+      ...refreshed,
+      contact: refreshed
+        ? {
+            ...refreshed.contact,
+            leadStage: this.extractLeadStage(refreshed.contact.customFields),
+            leadDetails: this.extractLeadDetails(refreshed.contact.customFields),
+          }
+        : null,
+    };
+
+    this.realtimeGateway.emitTenantEvent(tenantId, 'inbox.updated', {
+      type: 'conversation.leadDetails',
+      conversationId,
     });
 
     return payload;
@@ -379,6 +502,7 @@ export class InboxService {
             name: true,
             phoneNumber: true,
             tags: true,
+            customFields: true,
           },
         },
         channel: {
@@ -416,7 +540,14 @@ export class InboxService {
       status: updated.status,
     });
 
-    return updated;
+    return {
+      ...updated,
+      contact: {
+        ...updated.contact,
+        leadStage: this.extractLeadStage(updated.contact.customFields),
+        leadDetails: this.extractLeadDetails(updated.contact.customFields),
+      },
+    };
   }
 
   async updateConversationAssignee(
@@ -446,6 +577,7 @@ export class InboxService {
             name: true,
             phoneNumber: true,
             tags: true,
+            customFields: true,
           },
         },
         channel: {
@@ -483,7 +615,14 @@ export class InboxService {
       assignedToUserId: updated.assignedToUser?.id ?? null,
     });
 
-    return updated;
+    return {
+      ...updated,
+      contact: {
+        ...updated.contact,
+        leadStage: this.extractLeadStage(updated.contact.customFields),
+        leadDetails: this.extractLeadDetails(updated.contact.customFields),
+      },
+    };
   }
 
   private async requireConversationAccess(tenantId: string, conversationId: string) {
@@ -530,6 +669,35 @@ export class InboxService {
     }
 
     return 'new_lead';
+  }
+
+  private extractLeadDetails(customFields: unknown): DealerLeadDetails {
+    const data = this.toObject(customFields);
+
+    return {
+      vehicleType: data.vehicleType === 'car' || data.vehicleType === 'motorcycle' ? data.vehicleType : null,
+      brand: typeof data.brand === 'string' && data.brand.trim() ? data.brand.trim() : null,
+      modelInterest:
+        typeof data.modelInterest === 'string' && data.modelInterest.trim() ? data.modelInterest.trim() : null,
+      budgetMonthly:
+        typeof data.budgetMonthly === 'string' && data.budgetMonthly.trim() ? data.budgetMonthly.trim() : null,
+      purchaseType: data.purchaseType === 'cash' || data.purchaseType === 'loan' ? data.purchaseType : null,
+      tradeIn: data.tradeIn === 'yes' || data.tradeIn === 'no' ? data.tradeIn : null,
+      showroomBranch:
+        typeof data.showroomBranch === 'string' && data.showroomBranch.trim() ? data.showroomBranch.trim() : null,
+    };
+  }
+
+  private normalizeLeadDetails(details: Partial<DealerLeadDetails>) {
+    return {
+      vehicleType: details.vehicleType === 'car' || details.vehicleType === 'motorcycle' ? details.vehicleType : null,
+      brand: typeof details.brand === 'string' ? details.brand.trim() || null : null,
+      modelInterest: typeof details.modelInterest === 'string' ? details.modelInterest.trim() || null : null,
+      budgetMonthly: typeof details.budgetMonthly === 'string' ? details.budgetMonthly.trim() || null : null,
+      purchaseType: details.purchaseType === 'cash' || details.purchaseType === 'loan' ? details.purchaseType : null,
+      tradeIn: details.tradeIn === 'yes' || details.tradeIn === 'no' ? details.tradeIn : null,
+      showroomBranch: typeof details.showroomBranch === 'string' ? details.showroomBranch.trim() || null : null,
+    };
   }
 
   private toObject(value: unknown): Record<string, unknown> {

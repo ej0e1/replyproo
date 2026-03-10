@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock3, Phone, Tags, UserCheck, Users, Wifi } from 'lucide-react';
+import { Bike, CarFront, Clock3, CreditCard, Phone, Tags, UserCheck, Users, Wallet, Wifi } from 'lucide-react';
 import { clearAuthToken, fetchJson, getAuthToken } from '@/lib/auth';
 
 type MeResponse = {
@@ -22,9 +22,40 @@ type ContactSummary = {
   phoneNumber: string;
   email: string | null;
   tags: string[];
+  leadStage: 'new_lead' | 'follow_up' | 'test_drive' | 'booking' | 'loan_submitted' | 'won' | 'lost';
+  leadDetails: {
+    vehicleType: 'car' | 'motorcycle' | null;
+    brand: string | null;
+    modelInterest: string | null;
+    budgetMonthly: string | null;
+    purchaseType: 'cash' | 'loan' | null;
+    tradeIn: 'yes' | 'no' | null;
+    showroomBranch: string | null;
+  };
   optIn: boolean;
   lastSeenAt: string | null;
 };
+
+function formatLeadStage(stage: ContactSummary['leadStage']) {
+  switch (stage) {
+    case 'new_lead':
+      return 'New Lead';
+    case 'follow_up':
+      return 'Follow-up';
+    case 'test_drive':
+      return 'Test Drive';
+    case 'booking':
+      return 'Booking';
+    case 'loan_submitted':
+      return 'Loan Submitted';
+    case 'won':
+      return 'Won';
+    case 'lost':
+      return 'Lost';
+    default:
+      return stage;
+  }
+}
 
 export function ContactsManager() {
   const router = useRouter();
@@ -69,8 +100,8 @@ export function ContactsManager() {
       { label: 'Total Contacts', value: String(contacts.length).padStart(2, '0'), icon: Users },
       { label: 'Opt-in', value: String(contacts.filter((contact) => contact.optIn).length).padStart(2, '0'), icon: UserCheck },
       {
-        label: 'Tagged Contacts',
-        value: String(contacts.filter((contact) => contact.tags.length > 0).length).padStart(2, '0'),
+        label: 'Dealer Leads',
+        value: String(contacts.filter((contact) => contact.leadStage !== 'new_lead' || contact.leadDetails.modelInterest).length).padStart(2, '0'),
         icon: Tags,
       },
     ],
@@ -143,9 +174,44 @@ export function ContactsManager() {
               </div>
             </div>
 
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
+                {formatLeadStage(contact.leadStage)}
+              </span>
+              {contact.leadDetails.vehicleType ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-muted/70 px-2.5 py-1 text-xs font-medium text-foreground/70">
+                  {contact.leadDetails.vehicleType === 'car' ? <CarFront className="h-3 w-3" /> : <Bike className="h-3 w-3" />}
+                  {contact.leadDetails.vehicleType === 'car' ? 'Kereta' : 'Motor'}
+                </span>
+              ) : null}
+            </div>
+
             <div className="mt-4 flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-foreground/45">
               <Clock3 className="h-3.5 w-3.5" />
               {contact.lastSeenAt ? `Last seen ${new Date(contact.lastSeenAt).toLocaleString('ms-MY')}` : 'Belum ada aktiviti'}
+            </div>
+
+            <div className="mt-4 grid gap-2 rounded-2xl border bg-muted/45 px-3 py-3 text-xs text-foreground/68">
+              <div className="flex items-center justify-between gap-3">
+                <span>Brand / Model</span>
+                <span className="text-right font-medium text-foreground/82">
+                  {[contact.leadDetails.brand, contact.leadDetails.modelInterest].filter(Boolean).join(' - ') || 'Belum diisi'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="inline-flex items-center gap-1"><Wallet className="h-3 w-3" /> Budget</span>
+                <span className="text-right font-medium text-foreground/82">{contact.leadDetails.budgetMonthly ?? 'Belum diisi'}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="inline-flex items-center gap-1"><CreditCard className="h-3 w-3" /> Purchase</span>
+                <span className="text-right font-medium text-foreground/82">
+                  {contact.leadDetails.purchaseType ? `${contact.leadDetails.purchaseType}${contact.leadDetails.tradeIn ? ` / trade-in ${contact.leadDetails.tradeIn}` : ''}` : 'Belum diisi'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>Showroom</span>
+                <span className="text-right font-medium text-foreground/82">{contact.leadDetails.showroomBranch ?? 'Belum diisi'}</span>
+              </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">

@@ -100,6 +100,29 @@ export class InboxController {
     );
   }
 
+  @Patch('conversations/:conversationId/lead-details')
+  async updateLeadDetails(
+    @Req() req: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Body()
+    body: {
+      vehicleType?: 'car' | 'motorcycle' | null;
+      brand?: string | null;
+      modelInterest?: string | null;
+      budgetMonthly?: string | null;
+      purchaseType?: 'cash' | 'loan' | null;
+      tradeIn?: 'yes' | 'no' | null;
+      showroomBranch?: string | null;
+    },
+  ) {
+    return this.inboxService.updateLeadDetails(
+      this.requireTenant(req.user),
+      req.user.sub,
+      conversationId,
+      body,
+    );
+  }
+
   private requireTenant(user: AuthenticatedUser) {
     if (!user.activeTenantId) {
       throw new Error('Tenant aktif tidak dijumpai');
