@@ -3,31 +3,65 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import {
-  Bot,
-  ChevronLeft,
-  LayoutDashboard,
-  MessagesSquare,
-  Phone,
-  BarChart3,
-  Users,
-} from 'lucide-react';
+import { Bot, ChevronLeft, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-
-const items = [
-  { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
-  { href: '/dashboard/inbox', label: 'Inbox', icon: MessagesSquare },
-  { href: '/dashboard/channels', label: 'Channels', icon: Phone },
-  { href: '/dashboard/automations', label: 'Automations', icon: Bot },
-  { href: '/dashboard/contacts', label: 'Contacts', icon: Users },
-  { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
-  { href: '/dashboard/legacy', label: 'Legacy Dashboard', icon: LayoutDashboard },
-];
+import { workspaceNavItems } from './workspace-nav';
 
 export function WorkspaceSidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const filteredItems = workspaceNavItems.filter((item) => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return !normalizedSearch || item.label.toLowerCase().includes(normalizedSearch);
+  });
+
+  const renderSection = (section: 'workspace' | 'fallback', title: string) => {
+    const sectionItems = filteredItems.filter((item) => item.section === section);
+    if (!sectionItems.length) {
+      return null;
+    }
+
+    return (
+      <div className="space-y-2">
+        {!collapsed ? <p className="px-3 text-[11px] uppercase tracking-[0.24em] text-white/35">{title}</p> : null}
+        <div className="space-y-1">
+          {sectionItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = item.href === '/dashboard' ? pathname === item.href : pathname.startsWith(item.href);
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  'flex items-center gap-3 transition',
+                  collapsed ? 'justify-center rounded-xl px-2 py-3' : 'rounded-2xl px-4 py-3',
+                  isActive
+                    ? 'bg-white text-[#0f231d] shadow-sm'
+                    : 'text-white/78 hover:bg-white/8 hover:text-white',
+                )}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                {!collapsed ? (
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{item.label}</p>
+                    <p className={cn('truncate text-[11px]', isActive ? 'text-[#0f231d]/60' : 'text-white/42')}>
+                      {item.description}
+                    </p>
+                  </div>
+                ) : null}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <aside
@@ -48,26 +82,23 @@ export function WorkspaceSidebar() {
         ) : null}
       </div>
 
-      <nav className={cn('flex-1 space-y-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')}>
-        {items.map((item) => {
-          const Icon = item.icon;
-          const isActive = pathname === item.href;
+      {!collapsed ? (
+        <div className="border-b border-white/10 px-4 py-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search pages"
+              className="h-10 border-white/10 bg-white/8 pl-9 text-white placeholder:text-white/35 focus:border-white/20 focus:ring-white/10"
+            />
+          </div>
+        </div>
+      ) : null}
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-3 rounded-2xl transition',
-                collapsed ? 'justify-center px-2 py-3' : 'px-4 py-3',
-                isActive ? 'bg-white text-[#0f231d]' : 'text-white/78 hover:bg-white/8 hover:text-white',
-              )}
-            >
-              <Icon className="h-5 w-5 shrink-0" />
-              {!collapsed ? <span className="text-sm font-medium">{item.label}</span> : null}
-            </Link>
-          );
-        })}
+      <nav className={cn('flex-1 space-y-5 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')}>
+        {renderSection('workspace', 'Workspace')}
+        {renderSection('fallback', 'Fallback')}
       </nav>
 
       <div className={cn('border-t border-white/10 py-4', collapsed ? 'px-2' : 'px-3')}>
@@ -77,7 +108,7 @@ export function WorkspaceSidebar() {
           onClick={() => setCollapsed((value) => !value)}
         >
           <ChevronLeft className={cn('h-4 w-4 transition-transform', collapsed && 'rotate-180')} />
-          {!collapsed ? <span className="ml-2">Collapse</span> : null}
+          {!collapsed ? <span className="ml-2">Collapse Sidebar</span> : null}
         </Button>
       </div>
     </aside>

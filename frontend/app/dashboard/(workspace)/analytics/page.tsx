@@ -1,10 +1,5 @@
-import { WorkspacePlaceholder } from '@/components/dashboard/workspace-placeholder';
+import { AnalyticsManager } from '@/components/dashboard/analytics-manager';
 
 export default function DashboardAnalyticsPage() {
-  return (
-    <WorkspacePlaceholder
-      title="Analytics Workspace"
-      description="Analytics akan dijadikan page berasingan dalam shell baru. Buat masa ini route ini disediakan supaya struktur dashboard lebih tersusun sebelum modul analytics dibina."
-    />
-  );
+  return <AnalyticsManager />;
 }
