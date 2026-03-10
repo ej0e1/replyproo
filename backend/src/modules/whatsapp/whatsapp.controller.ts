@@ -71,16 +71,19 @@ export class WhatsAppController {
 
     const nextStatus = this.mapConnectionState(state) ?? channel.status;
     const metadata = this.toObject(channel.metadata);
+    const lastQrError = typeof metadata.lastQrError === 'string' ? metadata.lastQrError : null;
 
     const updated = await this.prisma.channel.update({
       where: { id: channel.id },
       data: {
         status: nextStatus,
+        qrCode: nextStatus === 'connected' ? null : channel.qrCode,
         lastConnectedAt: nextStatus === 'connected' ? new Date() : channel.lastConnectedAt,
         metadata: {
           ...metadata,
           connectionState: state,
           connectionUpdatedAt: new Date().toISOString(),
+          lastQrError: nextStatus === 'connected' ? null : lastQrError,
         },
       },
       select: {
@@ -108,16 +111,18 @@ export class WhatsAppController {
     }
 
     const qrCode = this.extractQrCode(payload);
+    const qrError = this.extractQrErrorMessage(payload);
     const metadata = this.toObject(channel.metadata);
 
     const updated = await this.prisma.channel.update({
       where: { id: channel.id },
       data: {
-        status: 'qr_pending',
+        status: qrCode ? 'qr_pending' : channel.status,
         qrCode,
         metadata: {
           ...metadata,
           lastQrEventAt: new Date().toISOString(),
+          lastQrError: qrError,
         },
       },
       select: {
@@ -570,15 +575,57 @@ export class WhatsAppController {
   }
 
   private extractQrCode(payload: any) {
-    return (
-      payload?.qrcode?.base64 ??
-      payload?.qrcode?.code ??
-      payload?.data?.qrcode?.base64 ??
-      payload?.data?.qrcode ??
-      payload?.data?.base64 ??
-      payload?.base64 ??
-      JSON.stringify(payload ?? null)
-    );
+    const candidates = [
+      payload?.qrcode?.base64,
+      payload?.qrcode?.code,
+      payload?.data?.qrcode?.base64,
+      payload?.data?.qrcode,
+      payload?.data?.base64,
+      payload?.base64,
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = this.normalizeQrCode(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return null;
+  }
+
+  private extractQrErrorMessage(payload: any) {
+    const candidates = [payload?.message, payload?.error, payload?.data?.message, payload?.data?.error];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeQrCode(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.startsWith('data:image/')) {
+      return normalized;
+    }
+
+    const compact = normalized.replace(/\s+/g, '');
+    if (compact.length >= 128 && compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+      return `data:image/png;base64,${compact}`;
+    }
+
+    return null;
   }
 
   private toObject(value: unknown): Record<string, unknown> {

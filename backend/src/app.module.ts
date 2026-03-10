@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AutomationsModule } from './modules/automations/automations.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ChannelsModule } from './modules/channels/channels.module';
 import { EvolutionModule } from './modules/evolution/evolution.module';
@@ -17,6 +18,7 @@ import { WhatsAppController } from './modules/whatsapp/whatsapp.controller';
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     RealtimeModule,
+    AutomationsModule,
     AuthModule,
     ChannelsModule,
     QueueModule,

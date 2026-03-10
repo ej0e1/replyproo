@@ -129,6 +129,65 @@ type ChannelSummary = {
   metadata: Record<string, unknown>;
 };
 
+type KeywordReplySettings = {
+  workflowId: string | null;
+  name: string;
+  isActive: boolean;
+  keywords: string[];
+  replyText: string;
+};
+
+function normalizeQrCode(qrCode: string | null) {
+  if (!qrCode) {
+    return null;
+  }
+
+  const normalized = qrCode.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.startsWith('data:image/')) {
+    return normalized;
+  }
+
+  const compact = normalized.replace(/\s+/g, '');
+  if (compact.length >= 128 && compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+    return `data:image/png;base64,${compact}`;
+  }
+
+  return null;
+}
+
+function extractQrError(channel: ChannelSummary) {
+  const metadataError = channel.metadata?.lastQrError;
+  if (typeof metadataError === 'string' && metadataError.trim()) {
+    return metadataError.trim();
+  }
+
+  if (!channel.qrCode || !channel.qrCode.trim().startsWith('{')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(channel.qrCode) as {
+      message?: unknown;
+      data?: { message?: unknown; error?: unknown };
+    };
+
+    const candidates = [parsed.message, parsed.data?.message, parsed.data?.error];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export function DashboardShell() {
   const router = useRouter();
   const [profile, setProfile] = useState<MeResponse | null>(null);
@@ -137,8 +196,16 @@ export function DashboardShell() {
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationDetail | null>(null);
+  const [automationSettings, setAutomationSettings] = useState<KeywordReplySettings | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
+  const [automationName, setAutomationName] = useState('Keyword Auto Reply');
+  const [automationKeywords, setAutomationKeywords] = useState('');
+  const [automationReplyText, setAutomationReplyText] = useState('');
+  const [automationEnabled, setAutomationEnabled] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isSavingAutomation, setIsSavingAutomation] = useState(false);
+  const [loadingQrByChannel, setLoadingQrByChannel] = useState<Record<string, boolean>>({});
+  const [qrCooldownByChannel, setQrCooldownByChannel] = useState<Record<string, boolean>>({});
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -169,12 +236,18 @@ export function DashboardShell() {
       fetchJson<ContactSummary[]>('/api/contacts', undefined, token),
       fetchJson<ConversationSummary[]>('/api/conversations', undefined, token),
       fetchJson<ChannelSummary[]>('/api/manage/channels', undefined, token),
+      fetchJson<KeywordReplySettings>('/api/manage/automations/keyword-reply', undefined, token),
     ])
-      .then(([profileData, contactsData, conversationsData, channelsData]) => {
+      .then(([profileData, contactsData, conversationsData, channelsData, automationData]) => {
         setProfile(profileData);
         setContacts(contactsData);
         setConversations(conversationsData);
         setChannels(channelsData);
+        setAutomationSettings(automationData);
+        setAutomationName(automationData.name);
+        setAutomationKeywords(automationData.keywords.join(', '));
+        setAutomationReplyText(automationData.replyText);
+        setAutomationEnabled(automationData.isActive);
         setActiveConversationId(conversationsData[0]?.id ?? null);
         setError(null);
       })
@@ -330,11 +403,22 @@ export function DashboardShell() {
       return;
     }
 
+    if (loadingQrByChannel[channelId] || qrCooldownByChannel[channelId]) {
+      return;
+    }
+
     try {
+      setLoadingQrByChannel((current) => ({ ...current, [channelId]: true }));
       await fetchJson(`/api/manage/channels/${channelId}/connect`, { method: 'POST' }, token);
       await refreshInboxData(token);
+      setQrCooldownByChannel((current) => ({ ...current, [channelId]: true }));
+      window.setTimeout(() => {
+        setQrCooldownByChannel((current) => ({ ...current, [channelId]: false }));
+      }, 15000);
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : 'Gagal connect channel');
+    } finally {
+      setLoadingQrByChannel((current) => ({ ...current, [channelId]: false }));
     }
   }
 
@@ -349,6 +433,45 @@ export function DashboardShell() {
       await refreshInboxData(token);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Gagal refresh channel');
+    }
+  }
+
+  async function handleSaveAutomationSettings() {
+    const token = getAuthToken();
+    if (!token) {
+      return;
+    }
+
+    setIsSavingAutomation(true);
+    setError(null);
+
+    try {
+      const payload = await fetchJson<KeywordReplySettings>(
+        '/api/manage/automations/keyword-reply',
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: automationName.trim() || 'Keyword Auto Reply',
+            isActive: automationEnabled,
+            keywords: automationKeywords
+              .split(',')
+              .map((keyword) => keyword.trim())
+              .filter(Boolean),
+            replyText: automationReplyText.trim(),
+          }),
+        },
+        token,
+      );
+
+      setAutomationSettings(payload);
+      setAutomationName(payload.name);
+      setAutomationKeywords(payload.keywords.join(', '));
+      setAutomationReplyText(payload.replyText);
+      setAutomationEnabled(payload.isActive);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Gagal simpan automation');
+    } finally {
+      setIsSavingAutomation(false);
     }
   }
 
@@ -599,56 +722,150 @@ export function DashboardShell() {
                 <h3 className="text-xl font-semibold">Channels & QR</h3>
               </div>
               <div className="mt-5 space-y-3 text-sm text-foreground/68">
-                {channels.map((channel) => (
-                  <div key={channel.id} className="rounded-2xl border bg-muted/55 px-4 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium">{channel.displayName}</p>
-                        <p className="text-sm text-foreground/60">
-                          {channel.phoneNumber ?? channel.evolutionInstanceName}
-                        </p>
+                {channels.map((channel) => {
+                  const qrImage = normalizeQrCode(channel.qrCode);
+                  const qrError = extractQrError(channel);
+                  const isQrLoading = Boolean(loadingQrByChannel[channel.id]);
+                  const isQrCoolingDown = Boolean(qrCooldownByChannel[channel.id]);
+                  const disableQrRequest = channel.status === 'connected' || isQrLoading || isQrCoolingDown;
+
+                  return (
+                    <div key={channel.id} className="rounded-2xl border bg-muted/55 px-4 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{channel.displayName}</p>
+                          <p className="text-sm text-foreground/60">
+                            {channel.phoneNumber ?? channel.evolutionInstanceName}
+                          </p>
+                        </div>
+                        <div
+                          className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${channel.status === 'connected' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
+                        >
+                          {channel.status === 'connected' ? (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          ) : (
+                            <Radio className="h-3.5 w-3.5" />
+                          )}
+                          {channel.status}
+                        </div>
                       </div>
-                      <div
-                        className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${channel.status === 'connected' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
-                      >
-                        {channel.status === 'connected' ? (
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        ) : (
-                          <Radio className="h-3.5 w-3.5" />
-                        )}
-                        {channel.status}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          variant="secondary"
+                          className="h-10"
+                          onClick={() => handleConnectChannel(channel.id)}
+                          disabled={disableQrRequest}
+                        >
+                          {channel.status === 'connected'
+                            ? 'Sudah Connect'
+                            : isQrLoading
+                              ? 'Meminta QR...'
+                              : isQrCoolingDown
+                                ? 'Tunggu Sebentar'
+                                : 'Ambil QR'}
+                        </Button>
+                        <Button variant="ghost" className="h-10" onClick={() => handleRefreshChannel(channel.id)}>
+                          Refresh Status
+                        </Button>
                       </div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button variant="secondary" className="h-10" onClick={() => handleConnectChannel(channel.id)}>
-                        Ambil QR
-                      </Button>
-                      <Button variant="ghost" className="h-10" onClick={() => handleRefreshChannel(channel.id)}>
-                        Refresh Status
-                      </Button>
-                    </div>
-                    {channel.qrCode ? (
-                      channel.qrCode.startsWith('data:image') ? (
+                      {qrImage ? (
                         <div className="mt-3 rounded-2xl border bg-white p-4">
                           <img
-                            src={channel.qrCode}
+                            src={qrImage}
                             alt={`QR ${channel.displayName}`}
                             className="mx-auto h-auto w-full max-w-[280px] rounded-xl"
                           />
                         </div>
                       ) : (
-                        <pre className="mt-3 overflow-x-auto rounded-2xl border bg-white p-3 text-[10px] leading-4 text-foreground/65">
-                          {channel.qrCode.slice(0, 400)}
-                        </pre>
-                      )
-                    ) : (
-                      <p className="mt-3 text-xs text-foreground/55">QR belum diambil untuk channel ini.</p>
-                    )}
-                  </div>
-                ))}
+                        <p className="mt-3 text-xs text-foreground/55">
+                          {qrError ?? (channel.status === 'connected'
+                            ? 'Channel sudah tersambung.'
+                            : 'QR belum tersedia untuk channel ini.')}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </article>
           </div>
+
+          <article className="rounded-[28px] border bg-white/85 p-6 shadow-panel">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <Sparkles className="h-5 w-5" />
+                <div>
+                  <h3 className="text-xl font-semibold">Automation Settings</h3>
+                  <p className="text-sm text-foreground/60">Urus keyword auto-reply untuk tenant semasa terus dari localhost.</p>
+                </div>
+              </div>
+              <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${automationEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                {automationEnabled ? 'Active' : 'Paused'}
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+              <div className="space-y-4 rounded-[24px] border bg-muted/55 p-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Workflow Name</p>
+                  <Input
+                    className="mt-2"
+                    value={automationName}
+                    onChange={(event) => setAutomationName(event.target.value)}
+                    placeholder="Keyword Auto Reply"
+                  />
+                </div>
+
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Keyword List</p>
+                  <Input
+                    className="mt-2"
+                    value={automationKeywords}
+                    onChange={(event) => setAutomationKeywords(event.target.value)}
+                    placeholder="stok, harga, delivery"
+                  />
+                  <p className="mt-2 text-xs text-foreground/55">Pisahkan keyword dengan koma. Matching dibuat secara lowercase.</p>
+                </div>
+
+                <label className="flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-sm">
+                  <div>
+                    <p className="font-medium">Auto-reply aktif</p>
+                    <p className="text-xs text-foreground/55">Bila aktif, inbound keyword akan terus queue balasan automatik.</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={automationEnabled}
+                    onChange={(event) => setAutomationEnabled(event.target.checked)}
+                    className="h-4 w-4 accent-[#17352b]"
+                  />
+                </label>
+
+                <div className="rounded-2xl bg-white px-4 py-3 text-sm text-foreground/65">
+                  <p>Workflow ID: {automationSettings?.workflowId ?? 'akan dicipta semasa save pertama'}</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 rounded-[24px] border bg-muted/55 p-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Reply Text</p>
+                  <textarea
+                    value={automationReplyText}
+                    onChange={(event) => setAutomationReplyText(event.target.value)}
+                    placeholder="Terima kasih. Team kami akan balas sebentar lagi."
+                    className="mt-2 min-h-[180px] w-full rounded-[22px] border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  />
+                  <p className="mt-2 text-xs text-foreground/55">Balasan ini akan dihantar bila mesej masuk mengandungi salah satu keyword di atas.</p>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white px-4 py-3 text-sm text-foreground/65">
+                  <span>Keyword aktif semasa: {automationSettings?.keywords.join(', ') || 'belum diset'}</span>
+                  <Button onClick={handleSaveAutomationSettings} disabled={isSavingAutomation} className="h-10">
+                    {isSavingAutomation ? 'Menyimpan...' : 'Simpan Setting'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </article>
         </section>
       </div>
     </main>

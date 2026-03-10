@@ -44,6 +44,7 @@ export class ChannelsService {
     try {
       const qrPayload = await this.getQrCodeWithRecovery(channel.evolutionInstanceName);
       qrCode = this.extractQrCode(qrPayload);
+      remoteError = this.extractQrErrorMessage(qrPayload) ?? remoteError;
     } catch (error) {
       remoteError = error instanceof Error ? error.message : 'Gagal mengambil QR';
     }
@@ -98,15 +99,20 @@ export class ChannelsService {
 
     const nextStatus = this.extractStatus(remote) ?? channel.status;
 
+    const metadata = this.toObject(channel.metadata) ?? {};
+    const lastQrError = typeof metadata.lastQrError === 'string' ? metadata.lastQrError : null;
+
     const updated = await this.prisma.channel.update({
       where: { id: channel.id },
       data: {
         status: nextStatus,
+        qrCode: nextStatus === 'connected' ? null : channel.qrCode,
         lastConnectedAt: nextStatus === 'connected' ? new Date() : channel.lastConnectedAt,
         metadata: {
-          ...(this.toObject(channel.metadata) ?? {}),
+          ...metadata,
           remote: this.toJsonValue(remote),
           remoteError,
+          lastQrError: nextStatus === 'connected' ? null : lastQrError,
         },
       },
       select: {
@@ -128,13 +134,50 @@ export class ChannelsService {
   private extractQrCode(payload: unknown) {
     const data = this.toObject(payload);
     const direct = data?.base64 ?? data?.qr ?? data?.qrcode ?? data?.code;
-    if (typeof direct === 'string') {
-      return direct;
+    const normalizedDirect = this.normalizeQrCode(direct);
+    if (normalizedDirect) {
+      return normalizedDirect;
     }
 
     const nested = this.toObject(data?.qrcode) ?? this.toObject(data?.data);
     const nestedValue = nested?.base64 ?? nested?.qrcode ?? nested?.qr ?? nested?.code;
-    return typeof nestedValue === 'string' ? nestedValue : JSON.stringify(payload ?? null);
+    return this.normalizeQrCode(nestedValue);
+  }
+
+  private extractQrErrorMessage(payload: unknown) {
+    const data = this.toObject(payload);
+    const nested = this.toObject(data?.data) ?? this.toObject(data?.qrcode);
+
+    const candidates = [data?.message, data?.error, nested?.message, nested?.error];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeQrCode(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.startsWith('data:image/')) {
+      return normalized;
+    }
+
+    const compact = normalized.replace(/\s+/g, '');
+    if (compact.length >= 128 && compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+      return `data:image/png;base64,${compact}`;
+    }
+
+    return null;
   }
 
   private extractStatus(payload: unknown) {
