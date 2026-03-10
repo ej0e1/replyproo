@@ -109,7 +109,12 @@ export class EvolutionService {
     }
 
     const raw = error.raw.toLowerCase();
-    return raw.includes('already exists') || raw.includes('already exist') || raw.includes('instance exists');
+    return (
+      raw.includes('already exists') ||
+      raw.includes('already exist') ||
+      raw.includes('instance exists') ||
+      raw.includes('already in use')
+    );
   }
 
   isUnsupportedInstanceFetch(error: unknown) {

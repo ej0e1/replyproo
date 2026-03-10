@@ -104,7 +104,12 @@ export class EvolutionClientService {
     }
 
     const raw = error.raw.toLowerCase();
-    return raw.includes('already exists') || raw.includes('already exist') || raw.includes('instance exists');
+    return (
+      raw.includes('already exists') ||
+      raw.includes('already exist') ||
+      raw.includes('instance exists') ||
+      raw.includes('already in use')
+    );
   }
 
   private async request(path: string, init: { method: string; body?: unknown }) {
