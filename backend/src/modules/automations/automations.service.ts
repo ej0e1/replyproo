@@ -9,6 +9,13 @@ export type KeywordRule = {
   replyText: string;
 };
 
+export type DealerQuickReply = {
+  id: string | null;
+  name: string;
+  isActive: boolean;
+  replyText: string;
+};
+
 @Injectable()
 export class AutomationsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -24,6 +31,34 @@ export class AutomationsService {
         keywords: this.extractKeywords(workflow.triggerConfig),
         replyText: this.extractReplyText(workflow.stepsConfig),
       })),
+    };
+  }
+
+  async getDealerQuickReplies(tenantId: string): Promise<{ templates: DealerQuickReply[] }> {
+    const templates = await this.prisma.workflowDefinition.findMany({
+      where: {
+        tenantId,
+        type: 'tagging',
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        triggerConfig: true,
+        stepsConfig: true,
+      },
+    });
+
+    return {
+      templates: templates
+        .filter((template) => this.toObject(template.triggerConfig).templateKind === 'dealer_quick_reply')
+        .map((template) => ({
+          id: template.id,
+          name: template.name,
+          isActive: template.isActive,
+          replyText: this.extractReplyText(template.stepsConfig),
+        })),
     };
   }
 
@@ -100,6 +135,82 @@ export class AutomationsService {
     });
 
     return this.getKeywordRules(tenantId);
+  }
+
+  async replaceDealerQuickReplies(
+    tenantId: string,
+    body: { templates?: Array<{ id?: string | null; isActive?: boolean; replyText?: string; name?: string }> },
+  ): Promise<{ templates: DealerQuickReply[] }> {
+    const incomingTemplates = Array.isArray(body.templates) ? body.templates : [];
+
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.workflowDefinition.findMany({
+        where: {
+          tenantId,
+          type: 'tagging',
+        },
+        select: {
+          id: true,
+          triggerConfig: true,
+        },
+      });
+
+      const quickReplyExisting = existing.filter(
+        (item) => this.toObject(item.triggerConfig).templateKind === 'dealer_quick_reply',
+      );
+      const keepIds = new Set<string>();
+
+      for (const template of incomingTemplates) {
+        const replyText = typeof template.replyText === 'string' ? template.replyText.trim() : '';
+        const name = typeof template.name === 'string' && template.name.trim() ? template.name.trim() : 'Dealer Quick Reply';
+
+        if (!replyText) {
+          continue;
+        }
+
+        const data = {
+          name,
+          type: 'tagging' as const,
+          isActive: Boolean(template.isActive),
+          triggerConfig: {
+            templateKind: 'dealer_quick_reply',
+          },
+          stepsConfig: {
+            replyText,
+          },
+        };
+
+        if (template.id && quickReplyExisting.some((item) => item.id === template.id)) {
+          await tx.workflowDefinition.update({
+            where: { id: template.id },
+            data,
+          });
+          keepIds.add(template.id);
+          continue;
+        }
+
+        const created = await tx.workflowDefinition.create({
+          data: {
+            tenantId,
+            ...data,
+          },
+          select: { id: true },
+        });
+        keepIds.add(created.id);
+      }
+
+      const deleteIds = quickReplyExisting.map((item) => item.id).filter((id) => !keepIds.has(id));
+      if (deleteIds.length) {
+        await tx.workflowDefinition.deleteMany({
+          where: {
+            tenantId,
+            id: { in: deleteIds },
+          },
+        });
+      }
+    });
+
+    return this.getDealerQuickReplies(tenantId);
   }
 
   async getKeywordReplySettings(tenantId: string) {

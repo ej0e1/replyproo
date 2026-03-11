@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { EvolutionService } from '../evolution/evolution.service';
@@ -113,6 +113,73 @@ export class ChannelsService {
           remote: this.toJsonValue(remote),
           remoteError,
           lastQrError: nextStatus === 'connected' ? null : lastQrError,
+        },
+      },
+      select: {
+        id: true,
+        displayName: true,
+        phoneNumber: true,
+        evolutionInstanceName: true,
+        status: true,
+        qrCode: true,
+        lastConnectedAt: true,
+        metadata: true,
+      },
+    });
+
+    this.realtimeGateway.emitTenantEvent(tenantId, 'channel.updated', updated);
+    return updated;
+  }
+
+  async updateChannelProfile(
+    tenantId: string,
+    channelId: string,
+    body: {
+      displayName?: string;
+      phoneNumber?: string | null;
+      showroomBranch?: string | null;
+      salesOwner?: string | null;
+    },
+  ) {
+    const channel = await this.prisma.channel.findFirst({
+      where: { id: channelId, tenantId },
+    });
+
+    if (!channel) {
+      throw new NotFoundException('Channel tidak dijumpai');
+    }
+
+    const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+    if (!displayName) {
+      throw new BadRequestException('Nama channel wajib diisi');
+    }
+
+    if (displayName.length > 160) {
+      throw new BadRequestException('Nama channel terlalu panjang (maksimum 160 aksara)');
+    }
+
+    const phoneNumber = this.normalizePhoneNumber(body.phoneNumber);
+    const showroomBranch = this.normalizeOptionalText(body.showroomBranch, 120);
+    const salesOwner = this.normalizeOptionalText(body.salesOwner, 120);
+    const nowIso = new Date().toISOString();
+
+    const metadata = this.toObject(channel.metadata) ?? {};
+    const profile = this.toObject(metadata.profile) ?? {};
+
+    const updated = await this.prisma.channel.update({
+      where: { id: channel.id },
+      data: {
+        displayName,
+        phoneNumber,
+        metadata: {
+          ...metadata,
+          profile: {
+            ...profile,
+            showroomBranch,
+            salesOwner,
+            updatedAt: nowIso,
+          },
+          profileCompletedAt: nowIso,
         },
       },
       select: {
@@ -271,6 +338,48 @@ export class ChannelsService {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, any>)
       : null;
+  }
+
+  private normalizePhoneNumber(value: string | null | undefined) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value !== 'string') {
+      throw new BadRequestException('Nombor telefon tidak sah');
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.length > 30) {
+      throw new BadRequestException('Nombor telefon terlalu panjang');
+    }
+
+    return normalized;
+  }
+
+  private normalizeOptionalText(value: string | null | undefined, maxLength: number) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value !== 'string') {
+      throw new BadRequestException('Input profil channel tidak sah');
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.length > maxLength) {
+      throw new BadRequestException(`Input profil channel melebihi had ${maxLength} aksara`);
+    }
+
+    return normalized;
   }
 
   private toJsonValue(value: unknown) {

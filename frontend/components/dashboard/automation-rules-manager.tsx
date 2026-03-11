@@ -19,11 +19,29 @@ type KeywordRulesResponse = {
   rules: KeywordRule[];
 };
 
+type DealerQuickReply = {
+  id: string | null;
+  name: string;
+  isActive: boolean;
+  replyText: string;
+};
+
+type DealerQuickRepliesResponse = {
+  templates: DealerQuickReply[];
+};
+
 type KeywordRuleForm = {
   id: string | null;
   name: string;
   isActive: boolean;
   keywordsText: string;
+  replyText: string;
+};
+
+type DealerQuickReplyForm = {
+  id: string | null;
+  name: string;
+  isActive: boolean;
   replyText: string;
 };
 
@@ -37,9 +55,19 @@ function toRuleForms(rules: KeywordRule[]) {
   }));
 }
 
+function toQuickReplyForms(templates: DealerQuickReply[]) {
+  return templates.map((template) => ({
+    id: template.id,
+    name: template.name,
+    isActive: template.isActive,
+    replyText: template.replyText,
+  }));
+}
+
 export function AutomationRulesManager() {
   const router = useRouter();
   const [rules, setRules] = useState<KeywordRuleForm[]>([]);
+  const [quickReplies, setQuickReplies] = useState<DealerQuickReplyForm[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +80,13 @@ export function AutomationRulesManager() {
       return;
     }
 
-    fetchJson<KeywordRulesResponse>('/api/manage/automations/keyword-rules', undefined, token)
-      .then((data) => {
-        setRules(toRuleForms(data.rules));
+    Promise.all([
+      fetchJson<KeywordRulesResponse>('/api/manage/automations/keyword-rules', undefined, token),
+      fetchJson<DealerQuickRepliesResponse>('/api/manage/automations/dealer-quick-replies', undefined, token),
+    ])
+      .then(([rulesData, quickRepliesData]) => {
+        setRules(toRuleForms(rulesData.rules));
+        setQuickReplies(toQuickReplyForms(quickRepliesData.templates));
         setError(null);
       })
       .catch((fetchError) => {
@@ -76,12 +108,17 @@ export function AutomationRulesManager() {
       return !rule.name.trim() || !hasKeywords || !rule.replyText.trim();
     });
 
-    if (invalidIndex === -1) {
-      return null;
+    if (invalidIndex !== -1) {
+      return `Rule ${invalidIndex + 1} perlukan nama, sekurang-kurangnya satu keyword, dan reply text.`;
     }
 
-    return `Rule ${invalidIndex + 1} perlukan nama, sekurang-kurangnya satu keyword, dan reply text.`;
-  }, [rules]);
+    const invalidTemplateIndex = quickReplies.findIndex((template) => !template.name.trim() || !template.replyText.trim());
+    if (invalidTemplateIndex !== -1) {
+      return `Quick reply ${invalidTemplateIndex + 1} perlukan nama dan reply text.`;
+    }
+
+    return null;
+  }, [quickReplies, rules]);
 
   function handleAddRule() {
     setRules((current) => [
@@ -91,6 +128,19 @@ export function AutomationRulesManager() {
         name: `Keyword Auto Reply ${current.length + 1}`,
         isActive: true,
         keywordsText: '',
+        replyText: '',
+      },
+    ]);
+    setSuccess(null);
+  }
+
+  function handleAddQuickReply() {
+    setQuickReplies((current) => [
+      ...current,
+      {
+        id: null,
+        name: `Dealer Reply ${current.length + 1}`,
+        isActive: true,
         replyText: '',
       },
     ]);
@@ -107,8 +157,23 @@ export function AutomationRulesManager() {
     setSuccess(null);
   }
 
+  function handleRemoveQuickReply(index: number) {
+    const target = quickReplies[index];
+    if (target && !window.confirm(`Buang quick reply "${target.name || `Template ${index + 1}`}"?`)) {
+      return;
+    }
+
+    setQuickReplies((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    setSuccess(null);
+  }
+
   function updateRule(index: number, patch: Partial<KeywordRuleForm>) {
     setRules((current) => current.map((rule, currentIndex) => (currentIndex === index ? { ...rule, ...patch } : rule)));
+    setSuccess(null);
+  }
+
+  function updateQuickReply(index: number, patch: Partial<DealerQuickReplyForm>) {
+    setQuickReplies((current) => current.map((item, currentIndex) => (currentIndex === index ? { ...item, ...patch } : item)));
     setSuccess(null);
   }
 
@@ -143,7 +208,24 @@ export function AutomationRulesManager() {
         token,
       );
 
+      const quickReplyPayload = await fetchJson<DealerQuickRepliesResponse>(
+        '/api/manage/automations/dealer-quick-replies',
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            templates: quickReplies.map((template) => ({
+              id: template.id,
+              name: template.name.trim(),
+              isActive: template.isActive,
+              replyText: template.replyText.trim(),
+            })),
+          }),
+        },
+        token,
+      );
+
       setRules(toRuleForms(payload.rules));
+      setQuickReplies(toQuickReplyForms(quickReplyPayload.templates));
       setSuccess('Automation rules berjaya disimpan.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Gagal simpan automation rules');
@@ -189,7 +271,9 @@ export function AutomationRulesManager() {
           <p className="mt-4 text-3xl font-semibold">{String(rules.filter((rule) => rule.isActive).length).padStart(2, '0')}</p>
         </div>
         <div className="rounded-[24px] border bg-white/90 p-5 shadow-sm">
-          <div className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
+          <p className="text-xs uppercase tracking-[0.18em] text-foreground/45">Dealer Replies</p>
+          <p className="mt-4 text-3xl font-semibold">{String(quickReplies.filter((reply) => reply.isActive).length).padStart(2, '0')}</p>
+          <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
             <Sparkles className="h-3.5 w-3.5" />
             localhost mode
           </div>
@@ -271,6 +355,75 @@ export function AutomationRulesManager() {
             <Plus className="h-4 w-4" />
             Tambah Rule
           </Button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.24em] text-foreground/45">Dealer Quick Replies</p>
+          <h2 className="mt-3 text-3xl font-semibold">Template Balasan Pantas</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground/65">
+            Template ini akan muncul dalam inbox dealer untuk pricing, stok, promo, test drive, loan, dan lokasi showroom. Sales boleh edit template ikut brand dan branch.
+          </p>
+        </div>
+
+        <Button variant="ghost" className="gap-2" onClick={handleAddQuickReply}>
+          <Plus className="h-4 w-4" />
+          Tambah Quick Reply
+        </Button>
+      </div>
+
+      {quickReplies.length ? (
+        quickReplies.map((template, index) => (
+          <div key={template.id ?? `quick-reply-${index}`} className="grid gap-4 rounded-[28px] border bg-white/90 p-5 shadow-panel lg:grid-cols-[0.88fr_1.12fr]">
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-foreground/45">Template {index + 1}</p>
+                  <p className="mt-2 text-sm text-foreground/60">Template ID: {template.id ?? 'akan dicipta semasa save'}</p>
+                </div>
+                <Button variant="ghost" className="gap-2 text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => handleRemoveQuickReply(index)}>
+                  <Trash2 className="h-4 w-4" />
+                  Buang
+                </Button>
+              </div>
+
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-foreground/45">Template Name</p>
+                <Input className="mt-2" value={template.name} onChange={(event) => updateQuickReply(index, { name: event.target.value })} placeholder="Harga / Stok / Promo" />
+              </div>
+
+              <label className="flex items-center justify-between rounded-2xl border bg-muted/45 px-4 py-3 text-sm">
+                <div>
+                  <p className="font-medium">Template aktif</p>
+                  <p className="text-xs text-foreground/55">Template aktif akan dipaparkan dalam quick replies inbox.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={template.isActive}
+                  onChange={(event) => updateQuickReply(index, { isActive: event.target.checked })}
+                  className="h-4 w-4 accent-[#17352b]"
+                />
+              </label>
+            </div>
+
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-foreground/45">Reply Text</p>
+              <textarea
+                value={template.replyText}
+                onChange={(event) => updateQuickReply(index, { replyText: event.target.value })}
+                placeholder="Hi {{contactName}}, untuk {{model}} saya boleh bantu semak harga..."
+                className="mt-2 min-h-[220px] w-full rounded-[24px] border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+              <div className="mt-3 rounded-2xl bg-muted/45 px-4 py-3 text-xs leading-5 text-foreground/55">
+                Placeholder yang boleh digunakan: <code>{'{{contactName}}'}</code>, <code>{'{{model}}'}</code>, <code>{'{{budget}}'}</code>, <code>{'{{branch}}'}</code>, <code>{'{{brand}}'}</code>, <code>{'{{vehicleType}}'}</code>.
+              </div>
+            </div>
+          </div>
+        ))
+      ) : (
+        <div className="rounded-[24px] border bg-muted/55 px-4 py-10 text-sm text-foreground/60">
+          Belum ada dealer quick reply. Tekan `Tambah Quick Reply` untuk mula bina template sales.
         </div>
       )}
     </div>

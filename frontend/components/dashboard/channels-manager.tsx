@@ -28,6 +28,13 @@ type ChannelSummary = {
   metadata: Record<string, unknown>;
 };
 
+type ChannelProfileForm = {
+  displayName: string;
+  phoneNumber: string;
+  showroomBranch: string;
+  salesOwner: string;
+};
+
 function normalizeQrCode(qrCode: string | null) {
   if (!qrCode) {
     return null;
@@ -79,6 +86,20 @@ function extractQrError(channel: ChannelSummary) {
   return null;
 }
 
+function toProfileForm(channel: ChannelSummary): ChannelProfileForm {
+  const metadataProfile =
+    channel.metadata?.profile && typeof channel.metadata.profile === 'object' && !Array.isArray(channel.metadata.profile)
+      ? (channel.metadata.profile as Record<string, unknown>)
+      : null;
+
+  return {
+    displayName: channel.displayName,
+    phoneNumber: channel.phoneNumber ?? '',
+    showroomBranch: typeof metadataProfile?.showroomBranch === 'string' ? metadataProfile.showroomBranch : '',
+    salesOwner: typeof metadataProfile?.salesOwner === 'string' ? metadataProfile.salesOwner : '',
+  };
+}
+
 export function ChannelsManager() {
   const router = useRouter();
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -90,6 +111,9 @@ export function ChannelsManager() {
   const [qrCooldownByChannel, setQrCooldownByChannel] = useState<Record<string, boolean>>({});
   const [refreshingByChannel, setRefreshingByChannel] = useState<Record<string, boolean>>({});
   const [socketConnected, setSocketConnected] = useState(false);
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
+  const [profileForm, setProfileForm] = useState<ChannelProfileForm | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   async function loadChannels(token: string) {
     const channelsData = await fetchJson<ChannelSummary[]>('/api/manage/channels', undefined, token);
@@ -195,6 +219,53 @@ export function ChannelsManager() {
     }
   }
 
+  function openProfileModal(channel: ChannelSummary) {
+    setEditingChannelId(channel.id);
+    setProfileForm(toProfileForm(channel));
+    setError(null);
+  }
+
+  function closeProfileModal(force = false) {
+    if (savingProfile && !force) {
+      return;
+    }
+
+    setEditingChannelId(null);
+    setProfileForm(null);
+  }
+
+  async function handleSaveProfile() {
+    const token = getAuthToken();
+    if (!token || !editingChannelId || !profileForm || savingProfile) {
+      return;
+    }
+
+    if (!profileForm.displayName.trim()) {
+      setError('Nama channel wajib diisi sebelum simpan profil.');
+      return;
+    }
+
+    try {
+      setSavingProfile(true);
+      setError(null);
+      await fetchJson(`/api/manage/channels/${editingChannelId}/profile`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          displayName: profileForm.displayName.trim(),
+          phoneNumber: profileForm.phoneNumber.trim() || null,
+          showroomBranch: profileForm.showroomBranch.trim() || null,
+          salesOwner: profileForm.salesOwner.trim() || null,
+        }),
+      }, token);
+      await loadChannels(token);
+      closeProfileModal(true);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Gagal simpan profil channel');
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
   const stats = useMemo(
     () => [
       { label: 'Total Numbers', value: String(channels.length).padStart(2, '0'), icon: Smartphone },
@@ -211,6 +282,27 @@ export function ChannelsManager() {
     ],
     [channels],
   );
+
+  const editingChannel = editingChannelId ? channels.find((channel) => channel.id === editingChannelId) ?? null : null;
+
+  useEffect(() => {
+    const target = channels.find((channel) => {
+      if (channel.status !== 'connected') {
+        return false;
+      }
+
+      const completedAt = channel.metadata?.profileCompletedAt;
+      return !(typeof completedAt === 'string' && completedAt.trim());
+    });
+
+    if (!target || editingChannelId) {
+      return;
+    }
+
+    setEditingChannelId(target.id);
+    setProfileForm(toProfileForm(target));
+    setError(null);
+  }, [channels, editingChannelId]);
 
   if (loading) {
     return <div className="rounded-[28px] border bg-white/90 px-6 py-10 text-sm text-foreground/65 shadow-panel">Memuatkan channels workspace...</div>;
@@ -300,6 +392,9 @@ export function ChannelsManager() {
                   <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                   {isRefreshing ? 'Refresh...' : 'Refresh Status'}
                 </Button>
+                <Button variant="ghost" className="h-10" onClick={() => openProfileModal(channel)}>
+                  Edit Profil
+                </Button>
               </div>
 
               {qrImage ? (
@@ -321,6 +416,74 @@ export function ChannelsManager() {
           </div>
         ) : null}
       </section>
+
+      {editingChannel && profileForm ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#08120f]/50 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[30px] border bg-white p-6 shadow-panel md:p-7">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">Post-QR Setup</p>
+                <h2 className="mt-2 text-2xl font-semibold">Kemaskini Profil Channel</h2>
+                <p className="mt-2 text-sm text-foreground/65">Lengkapkan nama nombor, branch showroom, dan PIC supaya handoff inbox kepada sales team lebih jelas.</p>
+              </div>
+              <div className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
+                {editingChannel.status}
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <label className="space-y-2 text-sm">
+                <span className="text-foreground/70">Nama Channel</span>
+                <input
+                  value={profileForm.displayName}
+                  onChange={(event) => setProfileForm((current) => (current ? { ...current, displayName: event.target.value } : current))}
+                  className="h-11 w-full rounded-2xl border bg-white px-3 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  placeholder="WA Showroom Utama"
+                />
+              </label>
+
+              <label className="space-y-2 text-sm">
+                <span className="text-foreground/70">Nombor WhatsApp</span>
+                <input
+                  value={profileForm.phoneNumber}
+                  onChange={(event) => setProfileForm((current) => (current ? { ...current, phoneNumber: event.target.value } : current))}
+                  className="h-11 w-full rounded-2xl border bg-white px-3 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  placeholder="60123456789"
+                />
+              </label>
+
+              <label className="space-y-2 text-sm">
+                <span className="text-foreground/70">Branch Showroom</span>
+                <input
+                  value={profileForm.showroomBranch}
+                  onChange={(event) => setProfileForm((current) => (current ? { ...current, showroomBranch: event.target.value } : current))}
+                  className="h-11 w-full rounded-2xl border bg-white px-3 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  placeholder="Setia Alam"
+                />
+              </label>
+
+              <label className="space-y-2 text-sm">
+                <span className="text-foreground/70">PIC Sales</span>
+                <input
+                  value={profileForm.salesOwner}
+                  onChange={(event) => setProfileForm((current) => (current ? { ...current, salesOwner: event.target.value } : current))}
+                  className="h-11 w-full rounded-2xl border bg-white px-3 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  placeholder="Ain / Hakim"
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={() => closeProfileModal()} disabled={savingProfile}>
+                Tutup
+              </Button>
+              <Button onClick={handleSaveProfile} disabled={savingProfile}>
+                {savingProfile ? 'Menyimpan...' : 'Simpan Profil'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -114,6 +114,17 @@ type ConversationDetail = {
   }>;
 };
 
+type DealerQuickReplyTemplate = {
+  id: string | null;
+  name: string;
+  isActive: boolean;
+  replyText: string;
+};
+
+type DealerQuickRepliesResponse = {
+  templates: DealerQuickReplyTemplate[];
+};
+
 function formatMessageStatus(status: string) {
   switch (status) {
     case 'queued':
@@ -158,7 +169,7 @@ function formatLeadStage(stage: ContactSummary['leadStage']) {
   }
 }
 
-function buildDealerQuickReplies(detail: ConversationDetail | null) {
+function buildDealerQuickReplies(detail: ConversationDetail | null, templates: DealerQuickReplyTemplate[]) {
   const contactName = detail?.contact.name ?? 'tuan/puan';
   const vehicleTypeLabel = detail?.contact.leadDetails.vehicleType === 'motorcycle' ? 'motor' : 'kereta';
   const brand = detail?.contact.leadDetails.brand ?? 'pilihan anda';
@@ -166,7 +177,7 @@ function buildDealerQuickReplies(detail: ConversationDetail | null) {
   const budget = detail?.contact.leadDetails.budgetMonthly ?? 'budget bulanan anda';
   const branch = detail?.contact.leadDetails.showroomBranch ?? 'showroom kami';
 
-  return [
+  const defaults = [
     {
       id: 'price',
       label: 'Harga',
@@ -198,6 +209,23 @@ function buildDealerQuickReplies(detail: ConversationDetail | null) {
       text: `Hi ${contactName}, anda boleh datang ke ${branch} untuk tengok unit ${model}. Kalau mahu, saya boleh share lokasi showroom dan arrange sales advisor standby untuk anda.`,
     },
   ];
+
+  const activeTemplates = templates.filter((template) => template.isActive && template.replyText.trim());
+  if (!activeTemplates.length) {
+    return defaults;
+  }
+
+  return activeTemplates.map((template) => ({
+    id: template.id ?? template.name,
+    label: template.name,
+    text: template.replyText
+      .replaceAll('{{contactName}}', contactName)
+      .replaceAll('{{vehicleType}}', vehicleTypeLabel)
+      .replaceAll('{{brand}}', brand)
+      .replaceAll('{{model}}', model)
+      .replaceAll('{{budget}}', budget)
+      .replaceAll('{{branch}}', branch),
+  }));
 }
 
 const dealerLeadStages: Array<ContactSummary['leadStage']> = [
@@ -221,6 +249,7 @@ export function InboxManager() {
   const [tenantPlan, setTenantPlan] = useState('starter');
   const [contacts, setContacts] = useState<ContactSummary[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [quickReplyTemplates, setQuickReplyTemplates] = useState<DealerQuickReplyTemplate[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationDetail | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
@@ -299,8 +328,9 @@ export function InboxManager() {
       fetchJson<MeResponse>('/api/auth/me', undefined, token),
       fetchJson<ContactSummary[]>('/api/contacts', undefined, token),
       fetchJson<ConversationSummary[]>('/api/conversations', undefined, token),
+      fetchJson<DealerQuickRepliesResponse>('/api/manage/automations/dealer-quick-replies', undefined, token),
     ])
-      .then(([profileData, contactsData, conversationsData]) => {
+      .then(([profileData, contactsData, conversationsData, quickRepliesData]) => {
         setProfile(profileData);
         const tenant = profileData.tenantMembers[0]?.tenant;
         setTenantId(tenant?.id ?? null);
@@ -309,6 +339,7 @@ export function InboxManager() {
         setTenantPlan(tenant?.planCode ?? 'starter');
         setContacts(contactsData);
         setConversations(conversationsData);
+        setQuickReplyTemplates(quickRepliesData.templates);
         setActiveConversationId(conversationsData[0]?.id ?? null);
         setError(null);
       })
@@ -543,7 +574,20 @@ export function InboxManager() {
     [conversations, stageFilter, statusFilter],
   );
 
-  const quickReplies = useMemo(() => buildDealerQuickReplies(conversationDetail), [conversationDetail]);
+  const kanbanColumns = useMemo(
+    () =>
+      dealerLeadStages.map((stage) => ({
+        stage,
+        title: formatLeadStage(stage),
+        conversations: filteredConversations.filter((conversation) => conversation.contact.leadStage === stage),
+      })),
+    [filteredConversations],
+  );
+
+  const quickReplies = useMemo(
+    () => buildDealerQuickReplies(conversationDetail, quickReplyTemplates),
+    [conversationDetail, quickReplyTemplates],
+  );
 
   useEffect(() => {
     if (!filteredConversations.length) {
@@ -642,6 +686,56 @@ export function InboxManager() {
               ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.16em] text-foreground/45">Dealer Kanban Board</p>
+            <h2 className="mt-2 text-2xl font-semibold">Pipeline Lead Mengikut Stage</h2>
+          </div>
+          <div className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-foreground/75">
+            {filteredConversations.length} active cards
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-4 2xl:grid-cols-7">
+          {kanbanColumns.map((column) => (
+            <article key={column.stage} className="rounded-[24px] border bg-white/90 p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{column.title}</p>
+                <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground/70">
+                  {column.conversations.length}
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {column.conversations.length ? (
+                  column.conversations.slice(0, 4).map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      onClick={() => setActiveConversationId(conversation.id)}
+                      className={`w-full rounded-2xl border px-3 py-3 text-left transition ${conversation.id === activeConversationId ? 'border-primary bg-secondary/55' : 'bg-muted/45 hover:bg-secondary/35'}`}
+                    >
+                      <p className="text-sm font-medium">{conversation.contact.name ?? conversation.contact.phoneNumber}</p>
+                      <p className="mt-1 text-xs text-foreground/60">{conversation.contact.leadDetails.modelInterest ?? conversation.channel.displayName}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-foreground/68">{conversation.messages[0]?.content ?? 'Tiada mesej terkini'}</p>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed bg-muted/40 px-3 py-6 text-center text-xs text-foreground/50">
+                    Tiada lead
+                  </div>
+                )}
+
+                {column.conversations.length > 4 ? (
+                  <p className="text-xs text-foreground/45">+{column.conversations.length - 4} lagi lead dalam stage ini</p>
+                ) : null}
+              </div>
+            </article>
+          ))}
         </div>
       </section>
 

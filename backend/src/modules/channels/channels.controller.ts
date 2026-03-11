@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -32,6 +32,21 @@ export class ChannelsController {
     @Param('channelId') channelId: string,
   ) {
     return this.channelsService.refreshChannelStatus(this.requireTenant(req.user), channelId);
+  }
+
+  @Patch(':channelId/profile')
+  async updateChannelProfile(
+    @Req() req: AuthenticatedRequest,
+    @Param('channelId') channelId: string,
+    @Body()
+    body: {
+      displayName?: string;
+      phoneNumber?: string | null;
+      showroomBranch?: string | null;
+      salesOwner?: string | null;
+    },
+  ) {
+    return this.channelsService.updateChannelProfile(this.requireTenant(req.user), channelId, body);
   }
 
   private requireTenant(user: AuthenticatedUser) {

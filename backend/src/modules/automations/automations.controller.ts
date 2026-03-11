@@ -23,6 +23,11 @@ export class AutomationsController {
     return this.automationsService.getKeywordRules(this.requireTenant(req.user));
   }
 
+  @Get('dealer-quick-replies')
+  async getDealerQuickReplies(@Req() req: AuthenticatedRequest) {
+    return this.automationsService.getDealerQuickReplies(this.requireTenant(req.user));
+  }
+
   @Put('keyword-reply')
   async updateKeywordReply(
     @Req() req: AuthenticatedRequest,
@@ -40,6 +45,17 @@ export class AutomationsController {
     },
   ) {
     return this.automationsService.replaceKeywordRules(this.requireTenant(req.user), body);
+  }
+
+  @Put('dealer-quick-replies')
+  async updateDealerQuickReplies(
+    @Req() req: AuthenticatedRequest,
+    @Body()
+    body: {
+      templates?: Array<{ id?: string | null; isActive?: boolean; replyText?: string; name?: string }>;
+    },
+  ) {
+    return this.automationsService.replaceDealerQuickReplies(this.requireTenant(req.user), body);
   }
 
   private requireTenant(user: AuthenticatedUser) {
